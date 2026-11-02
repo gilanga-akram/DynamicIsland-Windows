@@ -1,0 +1,143 @@
+﻿<Window x:Class="DynamicIsland.FloatingDockWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Floating Dock"
+        Height="86"
+        Width="920"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual">
+
+    <Window.Resources>
+        <Style x:Key="DockIconBtn" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Margin" Value="2.5,0"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="RootBorder" Background="{TemplateBinding Background}" RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform>
+                                <ScaleTransform x:Name="ScaleTrans" ScaleX="1.0" ScaleY="1.0"/>
+                            </Border.RenderTransform>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Trigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleX" To="1.15" Duration="0:0:0.12"/>
+                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleY" To="1.15" Duration="0:0:0.12"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.EnterActions>
+                                <Trigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleX" To="1.0" Duration="0:0:0.15"/>
+                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleY" To="1.0" Duration="0:0:0.15"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </Trigger.ExitActions>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+        <!-- Floating Dock macOS Crystal Frosted Glass Pill (58px height, 29px CornerRadius = perfectly continuous half-circle ends) -->
+        <Border HorizontalAlignment="Center" VerticalAlignment="Center" Height="58" BorderThickness="1.2" CornerRadius="29" Padding="14,3,26,3">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                    <GradientStop Color="#45384B62" Offset="0.0"/>
+                    <GradientStop Color="#281A2638" Offset="1.0"/>
+                </LinearGradientBrush>
+            </Border.Background>
+            <Border.BorderBrush>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                    <GradientStop Color="#80FFFFFF" Offset="0.0"/>
+                    <GradientStop Color="#25FFFFFF" Offset="1.0"/>
+                </LinearGradientBrush>
+            </Border.BorderBrush>
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="18" ShadowDepth="4" Direction="270" Color="#000000" Opacity="0.38"/>
+            </Border.Effect>
+
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <!-- 1. Start / Launcher Button -->
+                <Button x:Name="BtnLauncher" Style="{StaticResource DockIconBtn}" Click="BtnLauncher_Click" ToolTip="Menu Aplikasi (Launchpad)">
+                    <Border Width="38" Height="38" CornerRadius="12" Background="#2A3548" BorderBrush="#3D4B66" BorderThickness="1">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="4" ShadowDepth="1" Direction="270" Color="#000000" Opacity="0.2"/>
+                        </Border.Effect>
+                        <Path Stretch="Uniform" Width="14" Height="14" Fill="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" Data="M3,3h6v6H3V3zm8,0h6v6h-6V3zM3,11h6v6H3v-6zm8,0h6v6h-6v-6z"/>
+                    </Border>
+                </Button>
+
+                <!-- 2. Countdown / Reminder Pill -->
+                <Button x:Name="BtnDockTimer" Style="{StaticResource DockIconBtn}" Click="BtnDockTimer_Click" ToolTip="Pengingat Minum &amp; Fokus">
+                    <Border Height="38" CornerRadius="12" Background="#25FFFFFF" BorderBrush="#35FFFFFF" BorderThickness="1" Padding="8,2" VerticalAlignment="Center">
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                            <TextBlock x:Name="TxtDockTimer" Text="57:12" Foreground="#FFFFFF" FontSize="11" FontWeight="Bold" FontFamily="Segoe UI Variable Display, Consolas, monospace" HorizontalAlignment="Center"/>
+                            <TextBlock x:Name="TxtDockTimerLabel" Text="minum" Foreground="#8FA1B8" FontSize="8" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,-1,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </Button>
+
+                <!-- 3. Pinned Apps — dynamically populated from DockConfig -->
+                <StackPanel x:Name="PanelPinnedApps" Orientation="Horizontal" VerticalAlignment="Center"/>
+
+                <!-- 4. Thin Divider -->
+                <Rectangle Width="1" Height="24" Fill="#30FFFFFF" Margin="6,0,7,0" VerticalAlignment="Center"/>
+
+                <!-- 5. System Tray Section (Right) -->
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,4,0">
+                    <!-- Chevron: opens Action Center -->
+                    <Button Background="Transparent" BorderThickness="0" Cursor="Hand" Click="TrayChevron_Click" ToolTip="Pusat Tindakan Windows">
+                        <TextBlock Text="^" Foreground="#8FA1B8" FontSize="11" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,7,0"/>
+                    </Button>
+
+                <!-- Wi-Fi -->
+                <Button Background="Transparent" BorderThickness="0" Cursor="Hand" Click="TrayWifi_Click" ToolTip="Pengaturan Wi-Fi &amp; Kontrol">
+                    <Path Stretch="Uniform" Width="13" Height="11" Fill="#FFFFFF" VerticalAlignment="Center" Margin="0,0,7,0" Data="M12,4C7.31,4,3.07,5.9,0,8.98L12,21l12-12.02C20.93,5.9,16.69,4,12,4z"/>
+                </Button>
+
+                <!-- Volume -->
+                <Button Background="Transparent" BorderThickness="0" Cursor="Hand" Click="TrayVolume_Click" ToolTip="Pusat Kontrol (Volume &amp; Wi-Fi)">
+                    <Path Stretch="Uniform" Width="13" Height="11" Fill="#FFFFFF" VerticalAlignment="Center" Margin="0,0,7,0" Data="M3,9v6h4l5,5V4L7,9H3zm13.5,3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73,2.5-2.25,2.5-4.02z"/>
+                </Button>
+
+                <!-- Battery -->
+                <Button Background="Transparent" BorderThickness="0" Cursor="Hand" Click="TrayBattery_Click" ToolTip="Status Baterai &amp; Pengaturan">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,0">
+                        <TextBlock Text="🔋 " FontFamily="Segoe UI Emoji" FontSize="10" Foreground="#34C759" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="TxtDockBattery" Text="100%" Foreground="#FFFFFF" FontSize="10" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+
+                    <!-- Weather -->
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,9,0">
+                        <TextBlock Text="⛅ " FontFamily="Segoe UI Emoji" FontSize="10" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="TxtDockWeather" Text="30°" Foreground="#FFFFFF" FontSize="10.5" FontWeight="Bold" VerticalAlignment="Center"/>
+                    </StackPanel>
+
+                    <!-- Clock & Date -->
+                    <StackPanel VerticalAlignment="Center" Margin="4,0,12,0">
+                        <TextBlock x:Name="TxtDockClock" Text="12:44" Foreground="#FFFFFF" FontSize="11" FontWeight="Bold" HorizontalAlignment="Center"/>
+                        <TextBlock x:Name="TxtDockDate" Text="24/10/2026" Foreground="#8FA1B8" FontSize="8.5" HorizontalAlignment="Center" Margin="0,-1,0,0"/>
+                    </StackPanel>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

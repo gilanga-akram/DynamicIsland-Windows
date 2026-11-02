@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.4.0.schema.json
+PackageIdentifier: RIOT.DynamicIslandPro
+PackageVersion: 1.4.1
+PackageLocale: en-US
+Publisher: RIOT
+PublisherUrl: https://github.com/RIOT/DynamicIsland-Windows
+PublisherSupportUrl: https://github.com/RIOT/DynamicIsland-Windows/issues
+PrivacyUrl: https://github.com/RIOT/DynamicIsland-Windows/blob/main/PRIVACY.md
+Author: RIOT
+PackageName: Dynamic Island Pro
+PackageUrl: https://github.com/RIOT/DynamicIsland-Windows
+License: MIT
+Copyright: Copyright (c) 2026 RIOT
+ShortDescription: Dynamic Island & Floating Dock suite for Windows 10 and 11
+Description: A modern, fluid, macOS-inspired Dynamic Island notch and Floating Dock suite built natively with C# / WPF on .NET 9. Features game anti-disturbance, synchronized lyrics, audio controls, Pomodoro, and prayer time notifications.
+Tags:
+  - dynamic-island
+  - dock
+  - notch
+  - macos
+  - productivity
+  - widgets
+ReleaseNotesUrl: https://github.com/RIOT/DynamicIsland-Windows/releases/tag/v1.4.1
+ManifestType: defaultLocale
+ManifestVersion: 1.4.0

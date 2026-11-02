@@ -1,0 +1,428 @@
+<Window x:Class="DynamicIsland.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:DynamicIsland"
+        mc:Ignorable="d"
+        Title="Dynamic Island"
+        Height="280" Width="550"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        Loaded="Window_Loaded">
+
+    <Window.Resources>
+        <!-- Apple Dark Palette -->
+        <SolidColorBrush x:Key="IslandBg" Color="#070709" />
+        <SolidColorBrush x:Key="IslandBorder" Color="#222226" />
+        <SolidColorBrush x:Key="AccentCyan" Color="#0A84FF" />
+        <SolidColorBrush x:Key="AccentGreen" Color="#30D158" />
+        <SolidColorBrush x:Key="AccentOrange" Color="#FF9F0A" />
+        <SolidColorBrush x:Key="CardBg" Color="#151518" />
+        <SolidColorBrush x:Key="CardBorder" Color="#26262B" />
+        <SolidColorBrush x:Key="TextPrimary" Color="#F5F5F7" />
+        <SolidColorBrush x:Key="TextSecondary" Color="#8E8E93" />
+
+        <!-- Tab Button Style -->
+        <Style x:Key="TabBtnStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="#8E8E93" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="btnBorder" Background="{TemplateBinding Background}" CornerRadius="12" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#25252A" />
+                                <Setter Property="Foreground" Value="#FFFFFF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Action Round Button Style -->
+        <Style x:Key="RoundActionBtn" TargetType="Button">
+            <Setter Property="Background" Value="#1E1E22" />
+            <Setter Property="Foreground" Value="#F5F5F7" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="roundBorder" Background="{TemplateBinding Background}" CornerRadius="16" Width="{TemplateBinding Width}" Height="{TemplateBinding Height}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#323238" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter Property="Background" Value="#0A84FF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Quick Tool Card Button -->
+        <Style x:Key="ToolCardBtn" TargetType="Button">
+            <Setter Property="Background" Value="#151518" />
+            <Setter Property="BorderBrush" Value="#28282E" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="#F5F5F7" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="cardBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="12" Padding="6">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#222228" />
+                                <Setter Property="BorderBrush" Value="#0A84FF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <!-- Window Root Canvas to center Island at the top -->
+    <Grid HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,6,0,0">
+
+        <!-- The Island Pill / Squircle -->
+        <Border x:Name="IslandBorder"
+                Width="210"
+                Height="36"
+                CornerRadius="18"
+                Background="{StaticResource IslandBg}"
+                BorderBrush="{StaticResource IslandBorder}"
+                BorderThickness="1.2"
+                ClipToBounds="True"
+                MouseEnter="IslandBorder_MouseEnter"
+                MouseLeave="IslandBorder_MouseLeave"
+                MouseLeftButtonDown="IslandBorder_MouseLeftButtonDown"
+                Cursor="SizeAll">
+
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="28" ShadowDepth="4" Opacity="0.6" Color="#000000" Direction="270"/>
+            </Border.Effect>
+
+            <Border.ContextMenu>
+                <ContextMenu Background="#18181B" Foreground="#F5F5F7" BorderBrush="#2C2C30">
+                    <MenuItem Header="📌 Toggle Always Expanded" Click="MenuTogglePin_Click"/>
+                    <MenuItem Header="🧭 Reset Position to Top Center" Click="MenuResetPosition_Click"/>
+                    <Separator Background="#2C2C30"/>
+                    <MenuItem Header="❌ Exit Dynamic Island" Click="MenuExit_Click"/>
+                </ContextMenu>
+            </Border.ContextMenu>
+
+            <Grid>
+                <!-- ============================================== -->
+                <!-- 1. COMPACT VIEW (Idle Pill)                    -->
+                <!-- ============================================== -->
+                <Grid x:Name="CompactView" Visibility="Visible" Opacity="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Left: Camera notch / pulsating status dot -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                        <Border Width="10" Height="10" CornerRadius="5" Background="#121214" BorderBrush="#242428" BorderThickness="1">
+                            <Ellipse x:Name="CompactStatusDot" Width="6" Height="6" Fill="{StaticResource AccentGreen}" />
+                        </Border>
+
+                        <!-- Mini audio waves indicator -->
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0" Height="12">
+                            <Rectangle x:Name="MiniWave1" Width="2" Height="6" Fill="{StaticResource AccentGreen}" Margin="1,0" RadiusX="1" RadiusY="1"/>
+                            <Rectangle x:Name="MiniWave2" Width="2" Height="10" Fill="{StaticResource AccentGreen}" Margin="1,0" RadiusX="1" RadiusY="1"/>
+                            <Rectangle x:Name="MiniWave3" Width="2" Height="7" Fill="{StaticResource AccentGreen}" Margin="1,0" RadiusX="1" RadiusY="1"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- Center: Digital Clock -->
+                    <TextBlock Grid.Column="1" 
+                               Text="{Binding CurrentTimeString}" 
+                               Foreground="{StaticResource TextPrimary}" 
+                               FontWeight="SemiBold" 
+                               FontSize="13" 
+                               HorizontalAlignment="Center" 
+                               VerticalAlignment="Center"
+                               FontFamily="Segoe UI Variable Display, Segoe UI, sans-serif" />
+
+                    <!-- Right: Quick Stat (CPU %) -->
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0">
+                        <TextBlock Text="CPU" Foreground="{StaticResource TextSecondary}" FontSize="9.5" FontWeight="Bold" VerticalAlignment="Center" Margin="0,1,3,0"/>
+                        <TextBlock Text="{Binding CpuPercentage, StringFormat={}{0}%}" Foreground="{StaticResource AccentCyan}" FontWeight="Bold" FontSize="11.5" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
+
+
+                <!-- ============================================== -->
+                <!-- 2. EXPANDED VIEW                               -->
+                <!-- ============================================== -->
+                <Grid x:Name="ExpandedView" Visibility="Collapsed" Opacity="0" Margin="14,10,14,12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" /> <!-- Top Header & Navigation -->
+                        <RowDefinition Height="*" />    <!-- Content Tab Area -->
+                    </Grid.RowDefinitions>
+
+                    <!-- Header Row: Dynamic Island Brand, Nav Tabs, Pin/Close -->
+                    <Grid Grid.Row="0" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Mini Dynamic Island Pill Icon -->
+                        <Border Grid.Column="0" Background="#1C1C20" CornerRadius="10" Padding="8,3" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse Width="7" Height="7" Fill="{StaticResource AccentGreen}" Margin="0,0,5,0" />
+                                <TextBlock Text="Island" Foreground="{StaticResource TextPrimary}" FontSize="11" FontWeight="Bold" FontFamily="Segoe UI Variable Display, Segoe UI, sans-serif"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Navigation Tabs -->
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Button x:Name="TabMediaBtn" Content="🎵 Media" Style="{StaticResource TabBtnStyle}" Click="TabMedia_Click" />
+                            <Button x:Name="TabStatsBtn" Content="⚡ Stats" Style="{StaticResource TabBtnStyle}" Click="TabStats_Click" Margin="4,0,0,0"/>
+                            <Button x:Name="TabTimerBtn" Content="⏱️ Timer" Style="{StaticResource TabBtnStyle}" Click="TabTimer_Click" Margin="4,0,0,0"/>
+                            <Button x:Name="TabToolsBtn" Content="🛠️ Tools" Style="{StaticResource TabBtnStyle}" Click="TabTools_Click" Margin="4,0,0,0"/>
+                        </StackPanel>
+
+                        <!-- Top-Right Actions: Pin & Collapse -->
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button x:Name="PinButton" Width="24" Height="24" Background="Transparent" BorderThickness="0" Cursor="Hand" Click="PinButton_Click" ToolTip="Pin Open">
+                                <TextBlock x:Name="PinIcon" Text="📌" FontSize="11" Opacity="0.5" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Button>
+                            <Button Width="24" Height="24" Background="Transparent" BorderThickness="0" Cursor="Hand" Click="CollapseButton_Click" ToolTip="Collapse Island" Margin="2,0,0,0">
+                                <TextBlock Text="▲" FontSize="10" Foreground="{StaticResource TextSecondary}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+
+
+                    <!-- ============================================== -->
+                    <!-- TAB 1: MEDIA PLAYER                            -->
+                    <!-- ============================================== -->
+                    <Grid x:Name="TabMedia" Grid.Row="1" Visibility="Visible">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="65" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Album Art / Vinyl Disc Container -->
+                        <Border Grid.Column="0" Width="60" Height="60" CornerRadius="14" Background="#141418" BorderBrush="#2C2C33" BorderThickness="1.2" VerticalAlignment="Center" HorizontalAlignment="Left">
+                            <Grid>
+                                <!-- Subtle Gradient Art -->
+                                <Border CornerRadius="13">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                            <GradientStop Color="#1A365D" Offset="0"/>
+                                            <GradientStop Color="#0F172A" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                </Border>
+                                <TextBlock Text="🎵" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
+
+                        <!-- Track Info & Controls -->
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="8,0,0,0">
+                            <!-- Track Name and Equalizer -->
+                            <Grid>
+                                <StackPanel Orientation="Vertical">
+                                    <TextBlock Text="System Media Controller" Foreground="{StaticResource TextPrimary}" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Text="Spotify / YouTube / Media Player" Foreground="{StaticResource TextSecondary}" FontSize="11" Margin="0,1,0,0"/>
+                                </StackPanel>
+
+                                <!-- Live Dancing Audio Visualizer Bars -->
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Height="16">
+                                    <Rectangle x:Name="EqBar1" Width="3" Height="8" Fill="{StaticResource AccentGreen}" Margin="1.5,0" RadiusX="1.5" RadiusY="1.5"/>
+                                    <Rectangle x:Name="EqBar2" Width="3" Height="14" Fill="{StaticResource AccentGreen}" Margin="1.5,0" RadiusX="1.5" RadiusY="1.5"/>
+                                    <Rectangle x:Name="EqBar3" Width="3" Height="10" Fill="{StaticResource AccentGreen}" Margin="1.5,0" RadiusX="1.5" RadiusY="1.5"/>
+                                    <Rectangle x:Name="EqBar4" Width="3" Height="15" Fill="{StaticResource AccentGreen}" Margin="1.5,0" RadiusX="1.5" RadiusY="1.5"/>
+                                    <Rectangle x:Name="EqBar5" Width="3" Height="7" Fill="{StaticResource AccentGreen}" Margin="1.5,0" RadiusX="1.5" RadiusY="1.5"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- Control Buttons -->
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,10,0,0">
+                                <Button Width="32" Height="32" Style="{StaticResource RoundActionBtn}" Click="MediaPrev_Click" ToolTip="Previous Track">
+                                    <TextBlock Text="⏮" FontSize="13" Margin="0,-1,0,0"/>
+                                </Button>
+                                <Button Width="38" Height="38" Style="{StaticResource RoundActionBtn}" Background="#0A84FF" Click="MediaPlayPause_Click" ToolTip="Play / Pause" Margin="14,0">
+                                    <TextBlock Text="⏯" FontSize="15" Foreground="White" Margin="0,-1,0,0"/>
+                                </Button>
+                                <Button Width="32" Height="32" Style="{StaticResource RoundActionBtn}" Click="MediaNext_Click" ToolTip="Next Track">
+                                    <TextBlock Text="⏭" FontSize="13" Margin="0,-1,0,0"/>
+                                </Button>
+
+                                <Border Width="1" Height="22" Background="#2A2A30" Margin="14,0"/>
+
+                                <Button Width="30" Height="30" Style="{StaticResource RoundActionBtn}" Click="MediaMute_Click" ToolTip="Mute / Unmute">
+                                    <TextBlock Text="🔇" FontSize="11" Margin="0,-1,0,0"/>
+                                </Button>
+                                <Button Width="30" Height="30" Style="{StaticResource RoundActionBtn}" Click="MediaVolDown_Click" ToolTip="Volume Down" Margin="6,0,0,0">
+                                    <TextBlock Text="🔉" FontSize="11" Margin="0,-1,0,0"/>
+                                </Button>
+                                <Button Width="30" Height="30" Style="{StaticResource RoundActionBtn}" Click="MediaVolUp_Click" ToolTip="Volume Up" Margin="6,0,0,0">
+                                    <TextBlock Text="🔊" FontSize="11" Margin="0,-1,0,0"/>
+                                </Button>
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+
+
+                    <!-- ============================================== -->
+                    <!-- TAB 2: SYSTEM PERFORMANCE                      -->
+                    <!-- ============================================== -->
+                    <Grid x:Name="TabStats" Grid.Row="1" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- CPU Card -->
+                        <Border Grid.Column="0" Background="{StaticResource CardBg}" BorderBrush="{StaticResource CardBorder}" BorderThickness="1" CornerRadius="12" Padding="10,8" Margin="0,0,4,0">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="PROCESSOR" Foreground="{StaticResource TextSecondary}" FontSize="9" FontWeight="Bold" LetterSpacing="0.5"/>
+                                <TextBlock Text="{Binding CpuPercentage, StringFormat={}{0}%}" Foreground="{StaticResource AccentCyan}" FontSize="20" FontWeight="Bold" Margin="0,2,0,4"/>
+                                <ProgressBar Height="5" Value="{Binding CpuPercentage}" Maximum="100" BorderThickness="0" Background="#24242A" Foreground="{StaticResource AccentCyan}"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- RAM Card -->
+                        <Border Grid.Column="1" Background="{StaticResource CardBg}" BorderBrush="{StaticResource CardBorder}" BorderThickness="1" CornerRadius="12" Padding="10,8" Margin="4,0,4,0">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="MEMORY" Foreground="{StaticResource TextSecondary}" FontSize="9" FontWeight="Bold" LetterSpacing="0.5"/>
+                                <TextBlock Text="{Binding RamPercentage, StringFormat={}{0}%}" Foreground="{StaticResource AccentGreen}" FontSize="20" FontWeight="Bold" Margin="0,2,0,4"/>
+                                <ProgressBar Height="5" Value="{Binding RamPercentage}" Maximum="100" BorderThickness="0" Background="#24242A" Foreground="{StaticResource AccentGreen}"/>
+                                <TextBlock Margin="0,3,0,0" Foreground="{StaticResource TextSecondary}" FontSize="9.5">
+                                    <Run Text="{Binding RamUsedGb}"/> / <Run Text="{Binding RamTotalGb}"/> GB
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Power / Battery Card -->
+                        <Border Grid.Column="2" Background="{StaticResource CardBg}" BorderBrush="{StaticResource CardBorder}" BorderThickness="1" CornerRadius="12" Padding="10,8" Margin="4,0,0,0">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="POWER" Foreground="{StaticResource TextSecondary}" FontSize="9" FontWeight="Bold" LetterSpacing="0.5"/>
+                                <TextBlock Text="{Binding BatteryPercentage, StringFormat={}{0}%}" Foreground="{StaticResource AccentOrange}" FontSize="20" FontWeight="Bold" Margin="0,2,0,4"/>
+                                <ProgressBar Height="5" Value="{Binding BatteryPercentage}" Maximum="100" BorderThickness="0" Background="#24242A" Foreground="{StaticResource AccentOrange}"/>
+                                <TextBlock Text="{Binding CurrentDateString}" Foreground="{StaticResource TextSecondary}" FontSize="9" Margin="0,3,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+
+                    <!-- ============================================== -->
+                    <!-- TAB 3: FOCUS TIMER                             -->
+                    <!-- ============================================== -->
+                    <Grid x:Name="TabTimer" Grid.Row="1" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Digital Display -->
+                        <Border Grid.Column="0" Background="{StaticResource CardBg}" BorderBrush="{StaticResource CardBorder}" BorderThickness="1" CornerRadius="12" Padding="14,8" VerticalAlignment="Center">
+                            <StackPanel HorizontalAlignment="Center">
+                                <TextBlock x:Name="TimerDisplay" Text="25:00" Foreground="{StaticResource AccentOrange}" FontSize="26" FontWeight="Bold" FontFamily="Segoe UI Variable Display, Consolas, monospace" HorizontalAlignment="Center"/>
+                                <TextBlock x:Name="TimerModeLabel" Text="POMODORO FOCUS" Foreground="{StaticResource TextSecondary}" FontSize="8.5" FontWeight="Bold" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Timer Controls & Presets -->
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0,0,0">
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <Button Width="32" Height="32" Style="{StaticResource RoundActionBtn}" Background="#30D158" Click="TimerStartPause_Click">
+                                    <TextBlock x:Name="TimerStartIcon" Text="▶" FontSize="12" Foreground="Black" Margin="1,-1,0,0"/>
+                                </Button>
+                                <Button Width="32" Height="32" Style="{StaticResource RoundActionBtn}" Click="TimerReset_Click" Margin="10,0,0,0">
+                                    <TextBlock Text="🔄" FontSize="11" Margin="0,-1,0,0"/>
+                                </Button>
+                            </StackPanel>
+
+                            <!-- Presets -->
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,0">
+                                <Button Content="25m" Style="{StaticResource TabBtnStyle}" Click="TimerSet25_Click" Padding="6,2"/>
+                                <Button Content="15m" Style="{StaticResource TabBtnStyle}" Click="TimerSet15_Click" Padding="6,2" Margin="4,0,0,0"/>
+                                <Button Content="5m" Style="{StaticResource TabBtnStyle}" Click="TimerSet5_Click" Padding="6,2" Margin="4,0,0,0"/>
+                                <Button Content="Stopwatch" Style="{StaticResource TabBtnStyle}" Click="TimerSetStopwatch_Click" Padding="6,2" Margin="4,0,0,0"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+
+
+                    <!-- ============================================== -->
+                    <!-- TAB 4: QUICK TOOLS                             -->
+                    <!-- ============================================== -->
+                    <Grid x:Name="TabTools" Grid.Row="1" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Snipping Tool / Screenshot -->
+                        <Button Grid.Column="0" Style="{StaticResource ToolCardBtn}" Click="ToolScreenshot_Click" Margin="0,0,3,0">
+                            <StackPanel HorizontalAlignment="Center">
+                                <TextBlock Text="✂️" FontSize="18" HorizontalAlignment="Center"/>
+                                <TextBlock Text="Snip Tool" FontSize="10" Foreground="{StaticResource TextPrimary}" Margin="0,4,0,0" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+
+                        <!-- Calculator -->
+                        <Button Grid.Column="1" Style="{StaticResource ToolCardBtn}" Click="ToolCalc_Click" Margin="3,0,3,0">
+                            <StackPanel HorizontalAlignment="Center">
+                                <TextBlock Text="🧮" FontSize="18" HorizontalAlignment="Center"/>
+                                <TextBlock Text="Calculator" FontSize="10" Foreground="{StaticResource TextPrimary}" Margin="0,4,0,0" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+
+                        <!-- Task Manager -->
+                        <Button Grid.Column="2" Style="{StaticResource ToolCardBtn}" Click="ToolTaskMgr_Click" Margin="3,0,3,0">
+                            <StackPanel HorizontalAlignment="Center">
+                                <TextBlock Text="📈" FontSize="18" HorizontalAlignment="Center"/>
+                                <TextBlock Text="Task Mgr" FontSize="10" Foreground="{StaticResource TextPrimary}" Margin="0,4,0,0" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+
+                        <!-- Lock PC -->
+                        <Button Grid.Column="3" Style="{StaticResource ToolCardBtn}" Click="ToolLock_Click" Margin="3,0,0,0">
+                            <StackPanel HorizontalAlignment="Center">
+                                <TextBlock Text="🔒" FontSize="18" HorizontalAlignment="Center"/>
+                                <TextBlock Text="Lock PC" FontSize="10" Foreground="{StaticResource TextPrimary}" Margin="0,4,0,0" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
