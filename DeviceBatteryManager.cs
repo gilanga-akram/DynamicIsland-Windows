@@ -1,4 +1,4 @@
-// Language: C#
+﻿// Language: C#
 // Filename: DeviceBatteryManager.cs
 // Runs on: Windows 10 / Windows 11 (.NET 9.0-windows10.0.19041.0)
 // Targets: Headset & Mouse battery and connection status monitoring
@@ -73,18 +73,18 @@ namespace DynamicIsland
 
         public DeviceBatteryInfo Headset { get; } = new()
         {
-            Name = "Razer Barracuda X",
+            Name = "Headset tidak terhubung",
             DeviceType = "Headset",
-            BatteryPercent = 85,
-            IsConnected = true
+            BatteryPercent = 0,
+            IsConnected = false
         };
 
         public DeviceBatteryInfo Mouse { get; } = new()
         {
-            Name = "Wireless Mouse",
+            Name = "Mouse tidak terhubung",
             DeviceType = "Mouse",
-            BatteryPercent = 90,
-            IsConnected = true
+            BatteryPercent = 0,
+            IsConnected = false
         };
 
         private DeviceBatteryInfo _activeDisplayDevice;
@@ -140,6 +140,8 @@ namespace DynamicIsland
                 foreach (var dev in devices)
                 {
                     string name = dev.Name ?? "";
+                    if (dev.Properties.TryGetValue("System.Devices.Aep.IsConnected", out var conn) && conn is bool c && !c)
+                        continue;
 
                     // Headset detection (Razer Barracuda, Bluetooth headsets, AirPods)
                     if (!foundHeadset && (name.Contains("Barracuda", StringComparison.OrdinalIgnoreCase) ||
@@ -183,6 +185,13 @@ namespace DynamicIsland
                         });
                     }
                 }
+
+                bool h = foundHeadset, m = foundMouse;
+                _dispatcher.Invoke(() =>
+                {
+                    if (!h && Headset.IsConnected) Headset.IsConnected = false;
+                    if (!m && Mouse.IsConnected) Mouse.IsConnected = false;
+                });
             }
             catch
             {

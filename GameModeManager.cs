@@ -1,4 +1,4 @@
-// Language: C#
+﻿// Language: C#
 // Filename: GameModeManager.cs
 // Runs on: Windows 10 / Windows 11 (.NET 9.0-windows)
 // Targets: Gaming Hub, Live Game Detection, Game Boost, WinLock, and Low-Latency Telemetry
@@ -26,8 +26,8 @@ namespace DynamicIsland
         private bool _isBoostActive = false;
         private bool _isWinLockActive = false;
         private bool _isDndActive = false;
-        private string _boostStatusText = "🚀 Game Boost Siap";
-        private string _cleanRamStatus = "🧹 Bersihkan RAM";
+        private string _boostStatusText = "Game Boost Siap";
+        private string _cleanRamStatus = "Bersihkan RAM";
 
         // Keyboard Hook for WinKey Lock
         private IntPtr _hookId = IntPtr.Zero;
@@ -62,11 +62,12 @@ namespace DynamicIsland
         public bool IsDndActive
         {
             get => _isDndActive;
-            set { _isDndActive = value; OnPropertyChanged(); }
+            set { _isDndActive = value; NotificationManager.SuppressAll = value; OnPropertyChanged(); OnPropertyChanged(nameof(DndButtonText)); }
         }
 
-        public string BoostButtonText => _isBoostActive ? "🚀 Boost: AKTIF" : "🚀 Game Boost";
-        public string WinLockButtonText => _isWinLockActive ? "🔒 WinLock: AKTIF" : "🔓 WinLock";
+        public string BoostButtonText => _isBoostActive ? "Boost Aktif" : "Game Boost";
+        public string WinLockButtonText => _isWinLockActive ? "WinLock Aktif" : "WinLock";
+        public string DndButtonText => _isDndActive ? "Senyap Aktif" : "Mode Senyap";
 
         public string BoostStatusText
         {
@@ -225,7 +226,7 @@ namespace DynamicIsland
             IsBoostActive = !IsBoostActive;
             if (IsBoostActive)
             {
-                BoostStatusText = "🚀 Game Boost AKTIF (High Priority)";
+                BoostStatusText = "Game Boost aktif (prioritas tinggi)";
                 CleanRamNow();
                 try
                 {
@@ -242,7 +243,7 @@ namespace DynamicIsland
             }
             else
             {
-                BoostStatusText = "🚀 Game Boost Nonaktif";
+                BoostStatusText = "Game Boost nonaktif";
                 SoundManager.Play(AtollSound.Feedback);
             }
         }
@@ -263,39 +264,52 @@ namespace DynamicIsland
 
         public void CleanRamNow()
         {
-            try
+            if (_isCleaning) return;
+            _isCleaning = true;
+            CleanRamStatus = "Membersihkan...";
+            var ui = Dispatcher.CurrentDispatcher;
+            System.Threading.Tasks.Task.Run(() =>
             {
-                long before = GC.GetTotalMemory(false);
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-
-                // Empty working set for background processes
-                foreach (var p in Process.GetProcesses())
+                long freedMb = 0;
+                try
                 {
-                    try
+                    ulong before = AvailPhysBytes();
+                    foreach (var p in Process.GetProcesses())
                     {
-                        if (p.Id != Environment.ProcessId && !p.ProcessName.Equals("explorer", StringComparison.OrdinalIgnoreCase))
+                        try
                         {
-                            NativeMethods.EmptyWorkingSet(p.Handle);
+                            if (p.Id != Environment.ProcessId && p.Id > 4 &&
+                                !p.ProcessName.Equals("explorer", StringComparison.OrdinalIgnoreCase))
+                            {
+                                NativeMethods.EmptyWorkingSet(p.Handle);
+                            }
                         }
+                        catch { }
+                        finally { p.Dispose(); }
                     }
-                    catch { }
+                    ulong after = AvailPhysBytes();
+                    if (after > before) freedMb = (long)((after - before) / (1024 * 1024));
                 }
+                catch { }
 
-                CleanRamStatus = "🧹 RAM Dibersihkan!";
-                var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-                t.Tick += (s, e) =>
+                ui.InvokeAsync(() =>
                 {
-                    CleanRamStatus = "🧹 Bersihkan RAM";
-                    t.Stop();
-                };
-                t.Start();
-                SoundManager.Play(AtollSound.Feedback);
-            }
-            catch
-            {
-                CleanRamStatus = "🧹 Bersihkan RAM";
-            }
+                    _isCleaning = false;
+                    CleanRamStatus = freedMb > 0 ? $"{freedMb} MB dibebaskan" : "RAM sudah bersih";
+                    SoundManager.Play(AtollSound.Feedback);
+                    var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
+                    t.Tick += (s, e) => { CleanRamStatus = "Bersihkan RAM"; t.Stop(); };
+                    t.Start();
+                });
+            });
+        }
+
+        private bool _isCleaning;
+
+        private static ulong AvailPhysBytes()
+        {
+            var mem = NativeMethods.MEMORYSTATUSEX.Create();
+            return NativeMethods.GlobalMemoryStatusEx(ref mem) ? mem.ullAvailPhys : 0;
         }
 
         #region Low-Level Keyboard Hook for WinLock
@@ -333,6 +347,12 @@ namespace DynamicIsland
             if (nCode >= 0)
             {
                 int vkCode = Marshal.ReadInt32(lParam);
+                int hookFlags = Marshal.ReadInt32(lParam, 8);
+                bool injected = (hookFlags & 0x10) != 0; // LLKHF_INJECTED: our own cancel-key below
+                int msg = (int)wParam;
+                bool isDown = msg == WM_KEYDOWN || msg == 0x0104; // WM_KEYDOWN / WM_SYSKEYDOWN
+                bool isUp = msg == WM_KEYUP || msg == 0x0105;
+
                 if (vkCode == VK_LWIN || vkCode == VK_RWIN)
                 {
                     if (_isWinLockActive)
@@ -341,23 +361,43 @@ namespace DynamicIsland
                         return (IntPtr)1;
                     }
 
-                    // Normal mode: intercept WinKey keydown → toggle Launchpad
-                    if ((int)wParam == WM_KEYDOWN)
-                    {
-                        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
-                        {
-                            DockManager.Instance.ToggleLaunchpad();
-                        });
-                        // Block native Start Menu from opening
-                        return (IntPtr)1;
-                    }
+                    // Floating dock off → leave the Win key to the original Windows Start menu
+                    if (!DockManager.Instance.IsDockEnabled)
+                        return CallNextHookEx(_hookId, nCode, wParam, lParam);
 
-                    // Block WM_KEYUP too so no ghost Start Menu opens
-                    return (IntPtr)1;
+                    if (isDown)
+                    {
+                        if (!_winHeld) { _winHeld = true; _winComboUsed = false; }
+                    }
+                    else if (isUp && _winHeld)
+                    {
+                        _winHeld = false;
+                        if (!_winComboUsed)
+                        {
+                            // Plain Win tap: show the dock + Launchpad instead of the Start menu.
+                            // An injected dummy key makes Windows treat the tap as a combo, so Start stays closed.
+                            keybd_event(0xE8, 0, 0, UIntPtr.Zero);
+                            keybd_event(0xE8, 0, 2, UIntPtr.Zero);
+                            System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                            {
+                                DockManager.Instance.ToggleSummon();
+                            });
+                        }
+                    }
+                    // Win+E, Win+D, Win+L … keep working because the Win key itself is passed through
+                    return CallNextHookEx(_hookId, nCode, wParam, lParam);
                 }
+
+                if (_winHeld && isDown && !injected) _winComboUsed = true;
             }
             return CallNextHookEx(_hookId, nCode, wParam, lParam);
         }
+
+        private bool _winHeld;
+        private bool _winComboUsed;
+
+        [DllImport("user32.dll")]
+        private static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
 
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);

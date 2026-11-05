@@ -21,6 +21,7 @@ namespace DynamicIsland
 {
     public partial class LaunchpadWindow : Window
     {
+        public DateTime LastHiddenUtc { get; private set; } = DateTime.MinValue;
         private bool _deactivateEnabled = false;
         private DispatcherTimer? _deactivateArm;
         private DispatcherTimer? _searchDebounce;
@@ -45,6 +46,7 @@ namespace DynamicIsland
                 _deactivateArm.Start();
             };
 
+            IsVisibleChanged += (s, e) => { if (!IsVisible) LastHiddenUtc = DateTime.UtcNow; };
             KeyDown += LaunchpadWindow_KeyDown;
             Loaded += LaunchpadWindow_Loaded;
         }
@@ -98,10 +100,10 @@ namespace DynamicIsland
         {
             double sw = SystemParameters.PrimaryScreenWidth;
             double sh = SystemParameters.PrimaryScreenHeight;
-            Width = 480; Height = 560;
+            Width = 480; Height = 474;
             Left = (sw - Width) / 2.0;
             Top = dock != null && dock.IsVisible
-                ? dock.Top - Height - 8
+                ? dock.Top + 34 - Height - 6 // dock window has a transparent band above the visible bar (room for icon magnification)
                 : sh - Height - 90;
         }
 

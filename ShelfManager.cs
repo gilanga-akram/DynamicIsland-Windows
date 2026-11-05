@@ -501,6 +501,42 @@ namespace DynamicIsland
             throw new NotImplementedException();
     }
 
+    /// <summary>0–100 percentage to a 0–1 ScaleX, used for the macOS battery glyph fill.</summary>
+    public class PercentToScaleConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            double pct = value switch { int i => i, double d => d, _ => 0 };
+            return Math.Clamp(pct / 100.0, 0.0, 1.0);
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+            throw new NotImplementedException();
+    }
+
+    /// <summary>macOS battery colours: red at 20% or below, green otherwise.</summary>
+    public class PercentToBatteryBrushConverter : IValueConverter
+    {
+        private static readonly System.Windows.Media.Brush Low = Freeze(System.Windows.Media.Color.FromRgb(0xFF, 0x45, 0x3A));
+        private static readonly System.Windows.Media.Brush Normal = Freeze(System.Windows.Media.Color.FromRgb(0x30, 0xD1, 0x58));
+
+        private static System.Windows.Media.Brush Freeze(System.Windows.Media.Color c)
+        {
+            var b = new System.Windows.Media.SolidColorBrush(c);
+            b.Freeze();
+            return b;
+        }
+
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            int pct = value is int i ? i : 100;
+            return pct <= 20 ? Low : Normal;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+            throw new NotImplementedException();
+    }
+
     public class InverseBoolToVisibilityConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, CultureInfo culture)

@@ -5,7 +5,10 @@
 
 using System;
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Windows.Threading;
 
 namespace DynamicIsland
@@ -15,22 +18,26 @@ namespace DynamicIsland
         private static HealthManager? _instance;
         public static HealthManager Instance => _instance ??= new HealthManager();
 
+        private static readonly string StateFile = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DynamicIslandPro", "health.json");
+
         private readonly DispatcherTimer _timer;
 
-        private int _waterMinutesLeft = 45;
+        private int _waterMinutesLeft;
         private int _eyeMinutesLeft = 20;
         private bool _isWaterEnabled = true;
         private bool _isEyeEnabled = true;
 
-        private string _waterStatus = "💧 Minum air: 45m lagi";
-        private string _eyeStatus = "👀 Istirahat mata: 20m lagi";
+        private string _waterStatus = "";
+        private string _eyeStatus = "";
 
-        // Hydration tracker (daily intake)
-        private int _dailyWaterMl = 1250;
-        private int _targetWaterMl = 2000;
+        // Hydration tracker (daily intake, resets at midnight)
+        private int _dailyWaterMl;
+        private readonly int _targetWaterMl = 2000;
+        private DateTime _waterDate = DateTime.Today;
 
-        // Sedentary & Sitting tracker
-        private int _sittingMinutes = 48;
+        // Sedentary tracker: minutes of continuous computer use (resets after 5 min away)
+        private int _sittingMinutes;
 
         // Eye break 20-20-20 interactive countdown
         private bool _isEyeBreakActive = false;
@@ -45,6 +52,11 @@ namespace DynamicIsland
         private readonly DispatcherTimer _breathTimer;
 
         public event PropertyChangedEventHandler? PropertyChanged;
+
+        private static SettingsManager? S => SettingsManager.Instance;
+        private int WaterInterval => S?.WaterReminderIntervalMin > 0 ? S.WaterReminderIntervalMin : 45;
+        private bool PostureOn => S?.PostureReminder ?? true;
+        private bool EyeOn => S?.EyeBreakReminder ?? true;
 
         public string WaterStatus
         {
@@ -95,7 +107,7 @@ namespace DynamicIsland
             {
                 int hours = _sittingMinutes / 60;
                 int mins = _sittingMinutes % 60;
-                return hours > 0 ? $"🪑 Duduk: {hours}j {mins}m" : $"🪑 Duduk: {mins}m";
+                return hours > 0 ? $"Duduk: {hours}j {mins}m" : $"Duduk: {mins}m";
             }
         }
 
@@ -137,6 +149,11 @@ namespace DynamicIsland
 
         public HealthManager()
         {
+            LoadState();
+            _waterMinutesLeft = WaterInterval;
+            WaterStatus = $"Minum air: {_waterMinutesLeft}m lagi";
+            EyeStatus = $"Istirahat mata: {_eyeMinutesLeft}m lagi";
+
             _timer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
             _timer.Tick += (s, e) => TickMinute();
             _timer.Start();
@@ -150,14 +167,30 @@ namespace DynamicIsland
 
         private void TickMinute()
         {
+            // New day: reset the water counter
+            if (DateTime.Today != _waterDate)
+            {
+                _waterDate = DateTime.Today;
+                DailyWaterMl = 0;
+                SaveState();
+            }
+
+            // Away from the computer for 5+ minutes counts as a break
+            bool away = IdleSeconds() >= 300;
+            if (away)
+            {
+                if (SittingMinutes != 0) SittingMinutes = 0;
+                return; // don't nag while nobody is at the PC
+            }
+
             SittingMinutes++;
 
-            if (SittingMinutes % 60 == 0)
+            if (PostureOn && SittingMinutes % 60 == 0)
             {
                 NotificationManager.Instance?.ShowNotification(
-                    "🧘 Waktunya Peregangan!",
-                    "Kamu sudah duduk selama 1 jam. Berdiri dan regangkan punggungmu sebentar.",
-                    "Dynamic Island Health");
+                    "Waktunya Peregangan",
+                    $"Kamu sudah duduk {SittingMinutes / 60} jam. Berdiri dan regangkan punggung sebentar.",
+                    "Kesehatan", "#30D158");
                 SoundManager.Play(AtollSound.Feedback);
             }
 
@@ -166,37 +199,42 @@ namespace DynamicIsland
                 _waterMinutesLeft--;
                 if (_waterMinutesLeft <= 0)
                 {
-                    _waterMinutesLeft = 45;
+                    _waterMinutesLeft = WaterInterval;
                     NotificationManager.Instance?.ShowNotification(
-                        "💧 Waktunya Minum Air!",
-                        "Jaga hidrasi tubuh kamu agar tetap fokus dan segar.",
-                        "Dynamic Island Health");
+                        "Waktunya Minum Air",
+                        "Jaga hidrasi tubuh agar tetap fokus dan segar.",
+                        "Kesehatan", "#0A84FF");
                     SoundManager.Play(AtollSound.Feedback);
                 }
-                WaterStatus = $"💧 Minum air: {_waterMinutesLeft}m lagi";
+                WaterStatus = $"Minum air: {_waterMinutesLeft}m lagi";
             }
 
-            if (_isEyeEnabled)
+            if (_isEyeEnabled && EyeOn)
             {
                 _eyeMinutesLeft--;
                 if (_eyeMinutesLeft <= 0)
                 {
                     _eyeMinutesLeft = 20;
                     NotificationManager.Instance?.ShowNotification(
-                        "👀 Aturan 20-20-20",
-                        "Pandang objek sejauh 6 meter (20 kaki) selama 20 detik untuk relaksasi mata.",
-                        "Dynamic Island Health");
+                        "Aturan 20-20-20",
+                        "Pandang objek sejauh 6 meter selama 20 detik untuk mengistirahatkan mata.",
+                        "Kesehatan", "#30D158");
                     SoundManager.Play(AtollSound.Feedback);
                 }
-                EyeStatus = $"👀 Istirahat mata: {_eyeMinutesLeft}m lagi";
+                EyeStatus = $"Istirahat mata: {_eyeMinutesLeft}m lagi";
+            }
+            else if (!EyeOn)
+            {
+                EyeStatus = "Pengingat mata mati";
             }
         }
 
         public void DrinkWaterNow()
         {
             DailyWaterMl += 250;
-            _waterMinutesLeft = 45;
-            WaterStatus = $"💧 Air diminum! ({_waterMinutesLeft}m lagi)";
+            _waterMinutesLeft = WaterInterval;
+            WaterStatus = $"Air diminum! ({_waterMinutesLeft}m lagi)";
+            SaveState();
             SoundManager.Play(AtollSound.Feedback);
         }
 
@@ -212,13 +250,13 @@ namespace DynamicIsland
             {
                 IsEyeBreakActive = false;
                 _eyeBreakTimer.Stop();
-                EyeStatus = "👀 Istirahat mata selesai!";
+                EyeStatus = "Istirahat mata selesai";
                 return;
             }
 
             IsEyeBreakActive = true;
             EyeBreakCountdown = 20;
-            EyeStatus = $"👀 Tatap 6 meter... ({EyeBreakCountdown}s)";
+            EyeStatus = $"Tatap 6 meter... ({EyeBreakCountdown}s)";
             _eyeBreakTimer.Start();
             SoundManager.Play(AtollSound.Feedback);
         }
@@ -231,12 +269,12 @@ namespace DynamicIsland
                 _eyeBreakTimer.Stop();
                 IsEyeBreakActive = false;
                 _eyeMinutesLeft = 20;
-                EyeStatus = "👀 Mata rileks! (20m lagi)";
+                EyeStatus = "Mata rileks! (20m lagi)";
                 SoundManager.Play(AtollSound.Dynamic);
             }
             else
             {
-                EyeStatus = $"👀 Tatap 6 meter... ({EyeBreakCountdown}s)";
+                EyeStatus = $"Tatap 6 meter... ({EyeBreakCountdown}s)";
             }
         }
 
@@ -292,6 +330,55 @@ namespace DynamicIsland
                 };
                 BreathPrompt = $"{action}... ({_breathCount}s)";
             }
+        }
+
+        // ---------- persistence (today's water intake) ----------
+        private sealed class HealthState
+        {
+            public string Date { get; set; } = "";
+            public int WaterMl { get; set; }
+        }
+
+        private void LoadState()
+        {
+            try
+            {
+                if (!File.Exists(StateFile)) return;
+                var st = JsonSerializer.Deserialize<HealthState>(File.ReadAllText(StateFile));
+                if (st != null && st.Date == DateTime.Today.ToString("yyyy-MM-dd"))
+                    _dailyWaterMl = Math.Max(0, st.WaterMl);
+            }
+            catch { }
+        }
+
+        private void SaveState()
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(StateFile)!);
+                File.WriteAllText(StateFile, JsonSerializer.Serialize(new HealthState
+                {
+                    Date = _waterDate.ToString("yyyy-MM-dd"),
+                    WaterMl = _dailyWaterMl
+                }));
+            }
+            catch { }
+        }
+
+        // ---------- idle detection ----------
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+        [DllImport("user32.dll")] private static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
+        internal static double IdleSeconds()
+        {
+            try
+            {
+                var lii = new LASTINPUTINFO { cbSize = (uint)Marshal.SizeOf<LASTINPUTINFO>() };
+                if (!GetLastInputInfo(ref lii)) return 0;
+                return unchecked((uint)Environment.TickCount - lii.dwTime) / 1000.0;
+            }
+            catch { return 0; }
         }
 
         private void OnPropertyChanged([CallerMemberName] string? name = null)

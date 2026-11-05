@@ -108,6 +108,65 @@ namespace DynamicIsland
             set { if (_hasAlbumArt != value) { _hasAlbumArt = value; OnPropertyChanged(); } }
         }
 
+        private static readonly Brush _defaultAccent = CreateFrozenBrush(Color.FromRgb(0xF2, 0xF2, 0xF7));
+        private Brush _accentBrush = _defaultAccent;
+
+        /// <summary>Vivid colour sampled from the artwork (tints the notch waveform like macOS notch apps).</summary>
+        public Brush AccentBrush
+        {
+            get => _accentBrush;
+            set { if (!ReferenceEquals(_accentBrush, value)) { _accentBrush = value; OnPropertyChanged(); } }
+        }
+
+        private static Brush CreateFrozenBrush(Color c)
+        {
+            var b = new SolidColorBrush(c);
+            b.Freeze();
+            return b;
+        }
+
+        /// <summary>
+        /// Picks the most saturated mid-bright colour of a downscaled copy of the artwork,
+        /// then lifts its brightness so it stays readable on the black notch.
+        /// </summary>
+        private static Brush ComputeAccentBrush(BitmapSource? art)
+        {
+            if (art == null) return _defaultAccent;
+            try
+            {
+                double scale = 24.0 / Math.Max(art.PixelWidth, art.PixelHeight);
+                var small = new FormatConvertedBitmap(new TransformedBitmap(art, new ScaleTransform(scale, scale)), PixelFormats.Bgra32, null, 0);
+                int w = small.PixelWidth, h = small.PixelHeight, stride = w * 4;
+                var px = new byte[h * stride];
+                small.CopyPixels(px, stride, 0);
+
+                double bestScore = -1, sumR = 0, sumG = 0, sumB = 0, weight = 0;
+                for (int i = 0; i < px.Length; i += 4)
+                {
+                    double b = px[i] / 255.0, g = px[i + 1] / 255.0, r = px[i + 2] / 255.0;
+                    double max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b));
+                    double sat = max <= 0 ? 0 : (max - min) / max;
+                    // Favour colourful pixels that are neither near-black nor washed out
+                    double score = sat * (max > 0.25 ? 1.0 : 0.2) * (max < 0.98 || sat > 0.3 ? 1.0 : 0.3);
+                    if (score > bestScore) bestScore = score;
+                    double wgt = score * score;
+                    sumR += r * wgt; sumG += g * wgt; sumB += b * wgt; weight += wgt;
+                }
+
+                if (weight <= 0 || bestScore < 0.18) return _defaultAccent; // Greyscale artwork: stay neutral
+
+                double ar = sumR / weight, ag = sumG / weight, ab = sumB / weight;
+                double peak = Math.Max(ar, Math.Max(ag, ab));
+                double lift = peak > 0 ? Math.Min(3.0, 0.92 / peak) : 1.0;
+                byte To(double v) => (byte)Math.Clamp(v * lift * 255.0, 0, 255);
+                return CreateFrozenBrush(Color.FromRgb(To(ar), To(ag), To(ab)));
+            }
+            catch
+            {
+                return _defaultAccent;
+            }
+        }
+
         public string CurrentPosition
         {
             get => _currentPosition;
@@ -171,6 +230,7 @@ namespace DynamicIsland
                 if (_sessionManager != null)
                 {
                     _sessionManager.CurrentSessionChanged += async (s, e) => await RefreshCurrentSessionAsync();
+                    _sessionManager.SessionsChanged += async (s, e) => await RefreshCurrentSessionAsync();
                     await RefreshCurrentSessionAsync();
                 }
             }
@@ -193,7 +253,7 @@ namespace DynamicIsland
 
             try
             {
-                var session = _sessionManager?.GetCurrentSession();
+                var session = PickBestSession();
 
                 // If session changed, rebind event listeners
                 if (!ReferenceEquals(_currentSession, session))
@@ -226,23 +286,15 @@ namespace DynamicIsland
 
                 // Check app source (Apple Music, Spotify, Chrome, Edge, YouTube, etc.)
                 string appId = session.SourceAppUserModelId ?? "";
-                bool isApple = appId.Contains("Apple", StringComparison.OrdinalIgnoreCase) ||
-                               appId.Contains("iTunes", StringComparison.OrdinalIgnoreCase);
+                bool isApple = IsAppleMusicAppId(appId);
+                bool isSpotify = appId.Contains("Spotify", StringComparison.OrdinalIgnoreCase);
+                string? browserName = GetBrowserName(appId);
+                bool isBrowser = browserName != null;
 
-                bool isBrowser = appId.Contains("Chrome", StringComparison.OrdinalIgnoreCase) ||
-                                 appId.Contains("Edge", StringComparison.OrdinalIgnoreCase) ||
-                                 appId.Contains("Brave", StringComparison.OrdinalIgnoreCase) ||
-                                 appId.Contains("Firefox", StringComparison.OrdinalIgnoreCase) ||
-                                 appId.Contains("Opera", StringComparison.OrdinalIgnoreCase) ||
-                                 appId.Contains("Vivaldi", StringComparison.OrdinalIgnoreCase);
-
-                string appDisplayName = isApple ? "Apple Music" : "Now Playing";
-                if (appId.Contains("Spotify", StringComparison.OrdinalIgnoreCase)) appDisplayName = "Spotify";
-                else if (appId.Contains("Chrome", StringComparison.OrdinalIgnoreCase)) appDisplayName = "YouTube / Chrome";
-                else if (appId.Contains("Edge", StringComparison.OrdinalIgnoreCase)) appDisplayName = "YouTube / Edge";
-                else if (appId.Contains("Brave", StringComparison.OrdinalIgnoreCase)) appDisplayName = "YouTube / Brave";
-                else if (appId.Contains("Firefox", StringComparison.OrdinalIgnoreCase)) appDisplayName = "YouTube / Firefox";
-                else if (appId.Contains("Opera", StringComparison.OrdinalIgnoreCase)) appDisplayName = "YouTube / Opera";
+                string appDisplayName = isApple ? "Apple Music"
+                                      : isSpotify ? "Spotify"
+                                      : isBrowser ? $"YouTube / {browserName}"
+                                      : "Now Playing";
 
                 var playbackInfo = session.GetPlaybackInfo();
                 bool playing = playbackInfo?.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
@@ -255,10 +307,11 @@ namespace DynamicIsland
                 string displayTitle = rawTitle;
                 string displayArtist = rawArtist;
 
-                // When playing from browser (YouTube) or Apple Music, auto-clean metadata
-                if (isBrowser || isApple)
+                // Browser (YouTube) titles are "Artist - Title (Official Video)" and need splitting;
+                // Apple Music / Spotify already give the song name, they only need the album/noise stripped
+                if (isBrowser || isApple || isSpotify)
                 {
-                    var (cleanT, cleanA) = LyricsManager.CleanTrackMetadata(rawTitle, rawArtist);
+                    var (cleanT, cleanA) = LyricsManager.CleanTrackMetadata(rawTitle, rawArtist, structuredSource: !isBrowser);
                     if (!string.IsNullOrWhiteSpace(cleanT))
                     {
                         displayTitle = cleanT;
@@ -270,6 +323,7 @@ namespace DynamicIsland
                 }
 
                 BitmapImage? bitmap = null;
+                Brush accent = _defaultAccent;
                 if (mediaProperties?.Thumbnail != null)
                 {
                     try
@@ -286,6 +340,7 @@ namespace DynamicIsland
                         bitmap.StreamSource = memStream;
                         bitmap.EndInit();
                         bitmap.Freeze();
+                        accent = ComputeAccentBrush(bitmap);
                     }
                     catch { }
                 }
@@ -308,20 +363,21 @@ namespace DynamicIsland
                         _lastRawUpdatedTime = timeline.LastUpdatedTime;
 
                         bool isNewTrack = SongTitle != displayTitle || ArtistName != displayArtist;
+                        TimeSpan livePos = GetExtrapolatedSessionPosition(timeline, playing);
                         if (isNewTrack)
                         {
                             // Fresh track: start baseline at 0:00 (or raw position if mid-song), do NOT add stale ad-time
-                            _baselinePosition = (timeline.Position > TimeSpan.FromSeconds(2)) ? timeline.Position : TimeSpan.Zero;
+                            _baselinePosition = (timeline.Position > TimeSpan.FromSeconds(2)) ? livePos : TimeSpan.Zero;
                             if (playing) _playStopwatch.Restart();
                             else _playStopwatch.Reset();
                         }
                         else if (rawChanged)
                         {
                             TimeSpan cur = _baselinePosition + (_playStopwatch.IsRunning ? _playStopwatch.Elapsed : TimeSpan.Zero);
-                            if (Math.Abs((timeline.Position - cur).TotalSeconds) > 2.0)
+                            if (Math.Abs((livePos - cur).TotalSeconds) > 2.0)
                             {
                                 // User seeked in browser
-                                _baselinePosition = timeline.Position;
+                                _baselinePosition = livePos;
                                 if (playing) _playStopwatch.Restart();
                                 else _playStopwatch.Reset();
                             }
@@ -349,6 +405,7 @@ namespace DynamicIsland
                         HasAlbumArt = false;
                         AlbumArt = null;
                     }
+                    AccentBrush = accent;
 
                     if (trackChanged)
                     {
@@ -361,6 +418,70 @@ namespace DynamicIsland
             catch
             {
                 // Soft fail gracefully on transient media transition
+            }
+        }
+
+        public double DurationSeconds => _timelineEndTime.TotalSeconds;
+
+        private static bool IsAppleMusicAppId(string appId) =>
+            appId.Contains("AppleMusic", StringComparison.OrdinalIgnoreCase) ||
+            appId.Contains("AppleInc", StringComparison.OrdinalIgnoreCase) ||
+            appId.Contains("iTunes", StringComparison.OrdinalIgnoreCase);
+
+        private static string? GetBrowserName(string appId)
+        {
+            // Firefox registers with a hashed AppUserModelID instead of its name
+            if (appId.Contains("308046B0AF4A39CB", StringComparison.OrdinalIgnoreCase) ||
+                appId.Contains("Firefox", StringComparison.OrdinalIgnoreCase)) return "Firefox";
+            if (appId.Contains("Edge", StringComparison.OrdinalIgnoreCase)) return "Edge";
+            if (appId.Contains("Brave", StringComparison.OrdinalIgnoreCase)) return "Brave";
+            if (appId.Contains("Opera", StringComparison.OrdinalIgnoreCase)) return "Opera";
+            if (appId.Contains("Vivaldi", StringComparison.OrdinalIgnoreCase)) return "Vivaldi";
+            if (appId.Contains("TheBrowserCompany", StringComparison.OrdinalIgnoreCase) ||
+                appId.Equals("Arc", StringComparison.OrdinalIgnoreCase)) return "Arc";
+            if (appId.Contains("Zen", StringComparison.OrdinalIgnoreCase)) return "Zen";
+            if (appId.Contains("Thorium", StringComparison.OrdinalIgnoreCase)) return "Thorium";
+            if (appId.Contains("Floorp", StringComparison.OrdinalIgnoreCase)) return "Floorp";
+            if (appId.Contains("Waterfox", StringComparison.OrdinalIgnoreCase)) return "Waterfox";
+            if (appId.Contains("Chrome", StringComparison.OrdinalIgnoreCase) ||
+                appId.Contains("Chromium", StringComparison.OrdinalIgnoreCase)) return "Chrome";
+            return null;
+        }
+
+        /// <summary>
+        /// Windows' "current" session is simply the last one that grabbed focus, which is often a paused tab or
+        /// an app that isn't playing music. Prefer whatever is actually playing, music apps first.
+        /// </summary>
+        private GlobalSystemMediaTransportControlsSession? PickBestSession()
+        {
+            var current = _sessionManager?.GetCurrentSession();
+            try
+            {
+                bool IsPlayingSession(GlobalSystemMediaTransportControlsSession s) =>
+                    s.GetPlaybackInfo()?.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+
+                if (current != null && IsPlayingSession(current)) return current;
+
+                var sessions = _sessionManager?.GetSessions();
+                if (sessions == null || sessions.Count == 0) return current;
+
+                var playing = sessions.Where(IsPlayingSession).ToList();
+                if (playing.Count == 0)
+                {
+                    // Nothing playing: keep showing the session we were already tracking (paused song)
+                    if (_currentSession != null && sessions.Any(s => s.SourceAppUserModelId == _currentSession.SourceAppUserModelId))
+                        return sessions.First(s => s.SourceAppUserModelId == _currentSession.SourceAppUserModelId);
+                    return current;
+                }
+
+                return playing.FirstOrDefault(s => IsAppleMusicAppId(s.SourceAppUserModelId ?? "") ||
+                                                   (s.SourceAppUserModelId ?? "").Contains("Spotify", StringComparison.OrdinalIgnoreCase))
+                       ?? playing.FirstOrDefault(s => GetBrowserName(s.SourceAppUserModelId ?? "") != null)
+                       ?? playing[0];
+            }
+            catch
+            {
+                return current;
             }
         }
 
@@ -464,10 +585,11 @@ namespace DynamicIsland
                     if (rawChanged)
                     {
                         TimeSpan cur = _baselinePosition + (_playStopwatch.IsRunning ? _playStopwatch.Elapsed : TimeSpan.Zero);
-                        if (Math.Abs((timeline.Position - cur).TotalSeconds) > 2.0 || !_playStopwatch.IsRunning)
+                        TimeSpan livePos = GetExtrapolatedSessionPosition(timeline, _isPlaying);
+                        if (Math.Abs((livePos - cur).TotalSeconds) > 2.0 || !_playStopwatch.IsRunning)
                         {
                             // Real seek detected in media session
-                            _baselinePosition = timeline.Position;
+                            _baselinePosition = livePos;
                             if (_isPlaying) _playStopwatch.Restart();
                             else _playStopwatch.Reset();
                         }
@@ -506,10 +628,11 @@ namespace DynamicIsland
                                 _lastRawUpdatedTime = t.LastUpdatedTime;
 
                                 TimeSpan cur = _baselinePosition + (_playStopwatch.IsRunning ? _playStopwatch.Elapsed : TimeSpan.Zero);
-                                if (Math.Abs((t.Position - cur).TotalSeconds) > 2.0 || !_playStopwatch.IsRunning)
+                                TimeSpan livePos = GetExtrapolatedSessionPosition(t, _isPlaying);
+                                if (Math.Abs((livePos - cur).TotalSeconds) > 2.0 || !_playStopwatch.IsRunning)
                                 {
                                     // Real seek detected in browser
-                                    _baselinePosition = t.Position;
+                                    _baselinePosition = livePos;
                                     if (_isPlaying) _playStopwatch.Restart();
                                     else _playStopwatch.Reset();
                                 }

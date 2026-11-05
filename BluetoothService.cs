@@ -1,4 +1,4 @@
-// Language: C#
+﻿// Language: C#
 // Filename: BluetoothService.cs
 // Runs on: Windows 10 / Windows 11 (.NET 9.0-windows10.0.19041.0)
 // Targets: Native WinRT / Radio API Bluetooth detection & silent toggle without PowerShell popups
@@ -72,6 +72,42 @@ namespace DynamicIsland
                 Process.Start(new ProcessStartInfo("ms-settings:bluetooth") { UseShellExecute = true });
             }
             catch { }
+        }
+    }
+
+    /// <summary>Real on/off control for the Wi-Fi and Bluetooth radios via the WinRT Radio API.</summary>
+    public static class RadioToggleService
+    {
+        public static async Task<Radio?> GetRadioAsync(RadioKind kind)
+        {
+            try
+            {
+                if (await Radio.RequestAccessAsync() != RadioAccessStatus.Allowed) return null;
+                var radios = await Radio.GetRadiosAsync();
+                return radios.FirstOrDefault(r => r.Kind == kind);
+            }
+            catch { return null; }
+        }
+
+        /// <returns>null when no such radio exists / access denied, otherwise whether it is now on.</returns>
+        public static async Task<bool?> ToggleAsync(RadioKind kind)
+        {
+            var radio = await GetRadioAsync(kind);
+            if (radio == null) return null;
+            try
+            {
+                var target = radio.State == RadioState.On ? RadioState.Off : RadioState.On;
+                var res = await radio.SetStateAsync(target);
+                if (res != RadioAccessStatus.Allowed) return null;
+                return radio.State == RadioState.On;
+            }
+            catch { return null; }
+        }
+
+        public static async Task<bool?> IsOnAsync(RadioKind kind)
+        {
+            var radio = await GetRadioAsync(kind);
+            return radio == null ? (bool?)null : radio.State == RadioState.On;
         }
     }
 }

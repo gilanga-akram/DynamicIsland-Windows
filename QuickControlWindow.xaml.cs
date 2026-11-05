@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using System.Threading.Tasks;
 
 namespace DynamicIsland
 {
@@ -37,7 +38,7 @@ namespace DynamicIsland
             PanelWifiView.Visibility = Visibility.Collapsed;
 
             Width = 360;
-            Height = 420;
+            Height = 440;
             Left = rightX - Width;
             Top = bottomY - Height - 10;
 
@@ -54,20 +55,12 @@ namespace DynamicIsland
             if (isConnected && !string.IsNullOrEmpty(connectedSsid))
             {
                 TxtWifiStatus.Text = connectedSsid;
-                BdWifiTile.Background = new SolidColorBrush(Color.FromRgb(255, 255, 255));
-                TxtWifiHeader.Foreground = new SolidColorBrush(Color.FromRgb(17, 17, 17));
-                TxtWifiStatus.Foreground = new SolidColorBrush(Color.FromRgb(70, 70, 70));
-                IconWifi.Fill = new SolidColorBrush(Color.FromRgb(17, 17, 17));
-                TxtWifiArrow.Foreground = new SolidColorBrush(Color.FromRgb(85, 85, 85));
+                BdWifiTile.Background = CcOnBrush;
             }
             else
             {
                 TxtWifiStatus.Text = "Tidak terhubung";
-                BdWifiTile.Background = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF));
-                TxtWifiHeader.Foreground = new SolidColorBrush(Color.FromRgb(255, 255, 255));
-                TxtWifiStatus.Foreground = new SolidColorBrush(Color.FromRgb(180, 190, 205));
-                IconWifi.Fill = new SolidColorBrush(Color.FromRgb(255, 255, 255));
-                TxtWifiArrow.Foreground = new SolidColorBrush(Color.FromRgb(180, 190, 205));
+                BdWifiTile.Background = CcOffBrush;
             }
 
             // 2. Battery status
@@ -106,25 +99,21 @@ namespace DynamicIsland
             catch { }
         }
 
+        // macOS Control Center icon circles: blue when on, gray when off
+        private static readonly SolidColorBrush CcOnBrush = new SolidColorBrush(Color.FromRgb(0x0A, 0x84, 0xFF));
+        private static readonly SolidColorBrush CcOffBrush = new SolidColorBrush(Color.FromRgb(0x48, 0x48, 0x4A));
+
         private void UpdateBluetoothVisual()
         {
             if (BdBtTile == null) return;
             if (_isBluetoothOn)
             {
-                BdBtTile.Background = new SolidColorBrush(Color.FromRgb(255, 255, 255));
-                if (TxtBtHeader != null) TxtBtHeader.Foreground = new SolidColorBrush(Color.FromRgb(17, 17, 17));
-                if (TxtBtStatus != null) TxtBtStatus.Foreground = new SolidColorBrush(Color.FromRgb(70, 70, 70));
-                if (IconBt != null) IconBt.Fill = new SolidColorBrush(Color.FromRgb(17, 17, 17));
-                if (TxtBtArrow != null) TxtBtArrow.Foreground = new SolidColorBrush(Color.FromRgb(85, 85, 85));
+                BdBtTile.Background = CcOnBrush;
                 if (TxtBtStatus != null) TxtBtStatus.Text = "Nyala";
             }
             else
             {
-                BdBtTile.Background = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF));
-                if (TxtBtHeader != null) TxtBtHeader.Foreground = new SolidColorBrush(Color.FromRgb(255, 255, 255));
-                if (TxtBtStatus != null) TxtBtStatus.Foreground = new SolidColorBrush(Color.FromRgb(180, 190, 205));
-                if (IconBt != null) IconBt.Fill = new SolidColorBrush(Color.FromRgb(255, 255, 255));
-                if (TxtBtArrow != null) TxtBtArrow.Foreground = new SolidColorBrush(Color.FromRgb(180, 190, 205));
+                BdBtTile.Background = CcOffBrush;
                 if (TxtBtStatus != null) TxtBtStatus.Text = "Mati";
             }
         }
@@ -180,8 +169,8 @@ namespace DynamicIsland
                 var border = new Border
                 {
                     Background = net.IsConnected
-                        ? new SolidColorBrush(Color.FromArgb(0x60, 0x34, 0xC7, 0x59))
-                        : new SolidColorBrush(Color.FromArgb(0x25, 0xFF, 0xFF, 0xFF)),
+                        ? new SolidColorBrush(Color.FromRgb(0x0A, 0x84, 0xFF))
+                        : new SolidColorBrush(Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF)),
                     CornerRadius = new CornerRadius(10),
                     Padding = new Thickness(12, 8, 12, 8)
                 };
@@ -221,7 +210,7 @@ namespace DynamicIsland
                     var tbConn = new TextBlock
                     {
                         Text = "Terhubung",
-                        Foreground = new SolidColorBrush(Color.FromRgb(52, 199, 89)),
+                        Foreground = new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF)),
                         FontSize = 9.5
                     };
                     sp.Children.Add(tbConn);
@@ -280,17 +269,15 @@ namespace DynamicIsland
 
         private void BtnDndTile_Click(object sender, RoutedEventArgs e)
         {
-            _isDndActive = !_isDndActive;
-            if (_isDndActive)
-            {
-                BdDndTile.Background = new SolidColorBrush(Color.FromArgb(0x80, 0xAF, 0x52, 0xDE)); // purple glow
-                TxtDndStatus.Text = "Aktif";
-            }
-            else
-            {
-                BdDndTile.Background = new SolidColorBrush(Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF));
-                TxtDndStatus.Text = "Mati";
-            }
+            GameModeManager.Instance.ToggleDnd();
+            ApplyDndVisual();
+        }
+
+        private void ApplyDndVisual()
+        {
+            _isDndActive = GameModeManager.Instance.IsDndActive;
+            BdDndTile.Background = _isDndActive ? new SolidColorBrush(Color.FromRgb(0x5E, 0x5C, 0xE6)) : CcOffBrush; // macOS Focus indigo
+            TxtDndStatus.Text = _isDndActive ? "Aktif" : "Mati";
         }
 
         private void BtnBatterySaver_Click(object sender, RoutedEventArgs e)
@@ -313,10 +300,49 @@ namespace DynamicIsland
             }
         }
 
+        private DispatcherTimer? _brightnessDebounce;
+        private bool _brightnessSupported = true;
+
+        private async void RefreshBrightnessAsync()
+        {
+            int? cur = await System.Threading.Tasks.Task.Run(BrightnessService.Get);
+            _isUpdatingSliders = true;
+            if (cur.HasValue)
+            {
+                _brightnessSupported = true;
+                SliderBrightness.IsEnabled = true;
+                SliderBrightness.Value = cur.Value;
+                TxtBrightnessVal.Text = cur.Value.ToString();
+            }
+            else
+            {
+                _brightnessSupported = false;
+                SliderBrightness.IsEnabled = false;
+                TxtBrightnessVal.Text = "Tidak didukung";
+            }
+            _isUpdatingSliders = false;
+        }
+
         private void SliderBrightness_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             int val = (int)Math.Round(e.NewValue);
-            TxtBrightnessVal.Text = val.ToString();
+            if (TxtBrightnessVal != null && _brightnessSupported) TxtBrightnessVal.Text = val.ToString();
+            if (_isUpdatingSliders || !_brightnessSupported) return;
+
+            _brightnessDebounce ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+            _brightnessDebounce.Stop();
+            _brightnessDebounce.Tick -= BrightnessDebounce_Tick;
+            _brightnessDebounce.Tick += BrightnessDebounce_Tick;
+            _brightnessDebounce.Start();
+        }
+
+        private async void BrightnessDebounce_Tick(object? sender, EventArgs e)
+        {
+            _brightnessDebounce?.Stop();
+            int val = (int)Math.Round(SliderBrightness.Value);
+            await BrightnessService.SetAsync(val);
+            if (Application.Current.MainWindow is MainWindow mw && (mw.Settings?.ShowVolumeHUD ?? true))
+                mw.ShowHud("\uE706", val);
         }
 
         private void BtnOpenSettings_Click(object sender, RoutedEventArgs e)

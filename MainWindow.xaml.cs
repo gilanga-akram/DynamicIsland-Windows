@@ -1,4 +1,4 @@
-// Language: C#
+﻿// Language: C#
 // Filename: MainWindow.xaml.cs
 // Runs on: Windows 10 / Windows 11 (.NET 9.0-windows10.0.19041.0)
 // Targets: Dynamic Island Pro with ALL 7 menus preserved and zero box shadow artifacts
@@ -44,35 +44,32 @@ namespace DynamicIsland
     {
         // Brushes for Apple Hardware Notch (Collapsed / Idle: Pure Black) vs macOS Crystal Frosted Glass (Expanded: Matches Dock)
         private static readonly Brush _notchFillCollapsed = new SolidColorBrush(Color.FromRgb(0, 0, 0)); // Pure Hardware Notch Black
-        private static readonly Brush _notchBorderCollapsed = new SolidColorBrush(Color.FromArgb(255, 37, 37, 44)); // #25252C
+        private static readonly Brush _notchBorderCollapsed = new SolidColorBrush(Color.FromArgb(0x14, 255, 255, 255)); // Near-invisible rim, like the MacBook hardware notch
 
-        private static readonly Brush _glassFillExpanded = new LinearGradientBrush(
-            new GradientStopCollection
-            {
-                new GradientStop((Color)ColorConverter.ConvertFromString("#48384B62"), 0.0),
-                new GradientStop((Color)ColorConverter.ConvertFromString("#2E1A2638"), 1.0)
-            },
-            new Point(0, 0),
-            new Point(0, 1)
-        );
+        // macOS notch (expanded): stays pure black so it reads as one piece with the hardware notch
+        private static readonly Brush _glassFillExpanded = new SolidColorBrush(Color.FromRgb(0, 0, 0));
 
+        // Hairline rim that only catches light on the lower edge (fades out toward the top bezel)
         private static readonly Brush _glassBorderExpanded = new LinearGradientBrush(
             new GradientStopCollection
             {
-                new GradientStop((Color)ColorConverter.ConvertFromString("#85FFFFFF"), 0.0),
-                new GradientStop((Color)ColorConverter.ConvertFromString("#30FFFFFF"), 1.0)
+                new GradientStop((Color)ColorConverter.ConvertFromString("#00FFFFFF"), 0.0),
+                new GradientStop((Color)ColorConverter.ConvertFromString("#0DFFFFFF"), 0.5),
+                new GradientStop((Color)ColorConverter.ConvertFromString("#1FFFFFFF"), 1.0)
             },
             new Point(0, 0),
             new Point(0, 1)
         );
 
+        // Soft, wide macOS window shadow
         private static readonly System.Windows.Media.Effects.DropShadowEffect _glassShadowExpanded = new System.Windows.Media.Effects.DropShadowEffect
         {
-            BlurRadius = 24,
-            ShadowDepth = 6,
+            BlurRadius = 36,
+            ShadowDepth = 10,
             Direction = 270,
             Color = Colors.Black,
-            Opacity = 0.42
+            Opacity = 0.55,
+            RenderingBias = System.Windows.Media.Effects.RenderingBias.Quality
         };
         public SettingsManager Settings { get; }
         public SystemMetrics Metrics { get; }
@@ -90,7 +87,33 @@ namespace DynamicIsland
         public StartbarManager Startbar => StartbarManager.Instance;
 
         private bool _isExpanded = false;
-        private bool _isPinned = false;
+        private bool _isPinnedValue = false;
+
+        /// <summary>Island stays open while pinned. Every change refreshes the pin button so its state is always visible.</summary>
+        private bool _isPinned
+        {
+            get => _isPinnedValue;
+            set
+            {
+                _isPinnedValue = value;
+                UpdatePinVisual();
+            }
+        }
+
+        private void UpdatePinVisual()
+        {
+            if (PinIcon == null) return;
+            bool pinned = _isPinnedValue;
+            PinIcon.Text = pinned ? "" : "";   // filled "pinned" glyph vs outline pin
+            PinIcon.Opacity = pinned ? 1.0 : 0.6;
+            PinIcon.Foreground = pinned
+                ? new SolidColorBrush(Color.FromRgb(0x0A, 0x84, 0xFF))
+                : Brushes.White;
+            if (PinBadge != null)
+                PinBadge.Background = pinned ? new SolidColorBrush(Color.FromArgb(0x38, 0x0A, 0x84, 0xFF)) : Brushes.Transparent;
+            if (PinButton != null)
+                PinButton.ToolTip = pinned ? "Disematkan — klik untuk melepas" : "Sematkan island agar tetap terbuka";
+        }
         private bool _autoExpandOnHover = true;
 
         // Clock Ticker Timer
@@ -173,6 +196,10 @@ namespace DynamicIsland
         {
             Console.WriteLine("[DIAG] MainWindow.ctor start");
             InitializeComponent();
+            Loaded += (_, __) => RefreshRadioPills();
+            var radioTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
+            radioTimer.Tick += (_, __) => { if (ExpandedView.Visibility == Visibility.Visible) RefreshRadioPills(); };
+            radioTimer.Start();
             Console.WriteLine("[DIAG] MainWindow.ctor: InitializeComponent complete");
 
             try
@@ -186,7 +213,9 @@ namespace DynamicIsland
             }
 
             Console.WriteLine("[DIAG] Initializing SettingsManager...");
-            Settings = new SettingsManager();
+            // One shared instance: Weather, Health, Screen Time, Prayer, Calendar and the Dock read
+            // SettingsManager.Instance, so a second copy here meant Settings changes only applied after a restart.
+            Settings = SettingsManager.Instance;
             Console.WriteLine("[DIAG] Initializing SystemMetrics...");
             Metrics = new SystemMetrics();
             Console.WriteLine("[DIAG] Initializing MediaManager...");
@@ -415,6 +444,8 @@ namespace DynamicIsland
             UpdatePomodoroDate();
             DockManager.Instance.Initialize(Settings?.EnableFloatingDock ?? true);
             PrayerManager.Instance.CalculateDailyPrayers();
+            InitLiveActivities();
+            ApplyStartupPreferences();
             Console.WriteLine("[DIAG] Window_Loaded initialization finished.");
         }
 
@@ -469,7 +500,8 @@ namespace DynamicIsland
 
         public void ApplyDockLayout()
         {
-            double screenW = SystemParameters.PrimaryScreenWidth;
+            var area = TargetScreenDip();
+            double screenW = area.Width;
 
             CurrentDock = IslandDock.Top;
             if (Settings != null)
@@ -484,8 +516,8 @@ namespace DynamicIsland
                 IslandRootGrid.HorizontalAlignment = HorizontalAlignment.Center;
                 IslandRootGrid.VerticalAlignment = VerticalAlignment.Top;
             }
-            Left = (screenW - Width) / 2.0;
-            Top = 0;
+            Left = area.Left + (screenW - Width) * _horizontalPositionPercent;
+            Top = area.Top;
 
             if (!_isExpanded)
             {
@@ -502,9 +534,9 @@ namespace DynamicIsland
         {
             if (Settings?.LockPosition == true)
             {
-                double screenW = SystemParameters.PrimaryScreenWidth;
-                double expectedLeft = (screenW - Width) * _horizontalPositionPercent;
-                double expectedTop = 0;
+                var area = TargetScreenDip();
+                double expectedLeft = area.Left + (area.Width - Width) * _horizontalPositionPercent;
+                double expectedTop = area.Top;
 
                 if (Math.Abs(Left - expectedLeft) > 0.5 || Math.Abs(Top - expectedTop) > 0.5)
                 {
@@ -543,8 +575,9 @@ namespace DynamicIsland
             if (CurrentDock == IslandDock.Top)
             {
                 // Top dock geometry: Flared concave ears at top screen bezel, convex corners at bottom
-                double rTop = _isExpanded ? 16.0 : 10.0;
-                double rBot = _isExpanded ? 20.0 : 16.0;
+                // macOS notch proportions: tight ears at the bezel, generous rounded bottom
+                double rTop = _isExpanded ? 12.0 : 7.0;
+                double rBot = _isExpanded ? 22.0 : 13.0;
 
                 if (rTop * 2 + rBot * 2 > w) rTop = w * 0.1;
                 if (rTop + rBot > h) rBot = h - rTop;
@@ -815,18 +848,20 @@ namespace DynamicIsland
                 NotificationBannerView.Visibility = Visibility.Collapsed;
             }
 
-            var cubicEase = new CubicEase { EasingMode = EasingMode.EaseOut };
+            // macOS-style spring: quick start with a gentle overshoot that settles
+            var springEase = new BackEase { Amplitude = 0.18, EasingMode = EasingMode.EaseOut };
             int dur = Settings?.AnimationSpeedMs ?? 240;
+            int springDur = (int)(dur * 1.35);
 
             var (expW, expH) = GetTargetExpandedDimensions();
-            var animW = new DoubleAnimation(IslandBorder.ActualWidth, expW, TimeSpan.FromMilliseconds(dur))
+            var animW = new DoubleAnimation(IslandBorder.ActualWidth, expW, TimeSpan.FromMilliseconds(springDur))
             {
-                EasingFunction = cubicEase
+                EasingFunction = springEase
             };
 
-            var animH = new DoubleAnimation(IslandBorder.ActualHeight, expH, TimeSpan.FromMilliseconds(dur))
+            var animH = new DoubleAnimation(IslandBorder.ActualHeight, expH, TimeSpan.FromMilliseconds(springDur))
             {
-                EasingFunction = cubicEase
+                EasingFunction = springEase
             };
 
             var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(Math.Max(50, dur / 3)));
@@ -850,7 +885,7 @@ namespace DynamicIsland
             UpdateIslandVisualGlass(false);
             SoundManager.Play(AtollSound.Feedback);
 
-            var cubicEase = new CubicEase { EasingMode = EasingMode.EaseOut };
+            var cubicEase = new QuinticEase { EasingMode = EasingMode.EaseOut };
             int dur = Settings?.AnimationSpeedMs ?? 240;
 
             double targetW = (CurrentDock == IslandDock.Top) ? CompactW : 40;
@@ -902,6 +937,8 @@ namespace DynamicIsland
         // ==============================================
         private void IslandBorder_MouseEnter(object sender, MouseEventArgs e)
         {
+            _leaveRecheckTimer?.Stop();
+
             if (_isPinned)
             {
                 IslandBorder.Cursor = Cursors.Arrow;
@@ -935,14 +972,36 @@ namespace DynamicIsland
             }
         }
 
+        // Switching tabs resizes the island (e.g. 700 -> 540 wide), which can slide the tab the user just
+        // clicked out from under the cursor and fire a "mouse left" event. That must not close the island.
+        private DateTime _tabSwitchGraceUntil = DateTime.MinValue;
+        private DispatcherTimer? _leaveRecheckTimer;
+
         private void IslandBorder_MouseLeave(object sender, MouseEventArgs e)
         {
             _hoverDwellTimer?.Stop();
 
             if (!_isPinned && _isExpanded)
             {
+                if (DateTime.Now < _tabSwitchGraceUntil)
+                {
+                    // Re-check once the resize animation is done; close only if the cursor really is outside by then
+                    _leaveRecheckTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+                    _leaveRecheckTimer.Stop();
+                    _leaveRecheckTimer.Tick -= LeaveRecheckTimer_Tick;
+                    _leaveRecheckTimer.Tick += LeaveRecheckTimer_Tick;
+                    _leaveRecheckTimer.Start();
+                    return;
+                }
                 CollapseIsland();
             }
+        }
+
+        private void LeaveRecheckTimer_Tick(object? sender, EventArgs e)
+        {
+            _leaveRecheckTimer?.Stop();
+            if (!_isPinned && _isExpanded && !IslandBorder.IsMouseOver)
+                CollapseIsland();
         }
 
         // ==============================================
@@ -1269,34 +1328,38 @@ namespace DynamicIsland
             // In expanded mode, child handlers (TopHeaderGrid / ContentScrollViewer) handle mouse wheel.
         }
 
+        // The wheel never switches tabs any more: it used to, which made scrolling lyrics (or any list) jump to another menu.
         private void TopHeaderGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
         {
-            CycleTabs(e.Delta < 0);
-            e.Handled = true;
+            // Nothing: the mouse wheel is left alone over the header
         }
 
         private void TabsScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
         {
-            CycleTabs(e.Delta < 0);
-            e.Handled = true;
+            // When there are more tab icons than fit, the wheel only slides the strip sideways
+            if (TabsScrollViewer != null && TabsScrollViewer.ScrollableWidth > 0)
+            {
+                TabsScrollViewer.ScrollToHorizontalOffset(TabsScrollViewer.HorizontalOffset - e.Delta / 2.0);
+                e.Handled = true;
+            }
         }
 
         private void ContentScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
         {
-            if (ContentScrollViewer != null && ContentScrollViewer.ScrollableHeight > 0)
+            if (ContentScrollViewer == null || ContentScrollViewer.ScrollableHeight <= 0) return;
+
+            // A list inside the page (lyrics, clipboard, ...) that can scroll gets the wheel first
+            for (DependencyObject? d = e.OriginalSource as DependencyObject; d != null && !ReferenceEquals(d, ContentScrollViewer);
+                 d = d is Visual or System.Windows.Media.Media3D.Visual3D ? System.Windows.Media.VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
             {
-                // Smooth vertical scrolling inside compact dynamic island
-                double delta = e.Delta > 0 ? -32 : 32;
-                double newOffset = Math.Clamp(ContentScrollViewer.VerticalOffset + delta, 0, ContentScrollViewer.ScrollableHeight);
-                ContentScrollViewer.ScrollToVerticalOffset(newOffset);
-                e.Handled = true;
+                if (d is ScrollViewer inner && inner.ScrollableHeight > 0) return;
             }
-            else
-            {
-                // Content fits fully without vertical scroll; cycle through tabs
-                CycleTabs(e.Delta < 0);
-                e.Handled = true;
-            }
+
+            // Smooth vertical scrolling of the page itself
+            double delta = e.Delta > 0 ? -32 : 32;
+            double newOffset = Math.Clamp(ContentScrollViewer.VerticalOffset + delta, 0, ContentScrollViewer.ScrollableHeight);
+            ContentScrollViewer.ScrollToVerticalOffset(newOffset);
+            e.Handled = true;
         }
 
         public void CycleTabs(bool forward)
@@ -1391,9 +1454,9 @@ namespace DynamicIsland
 
             var normalBg = Brushes.Transparent;
             var normalBorder = Brushes.Transparent;
-            var normalFg = new SolidColorBrush(Color.FromRgb(240, 245, 255)); // Bright White #F0F5FF
-            var activeBg = new SolidColorBrush(Color.FromArgb(120, 255, 255, 255)); // Luminous Glass Pill #78FFFFFF
-            var activeBorder = new SolidColorBrush(Color.FromArgb(180, 255, 255, 255)); // Vivid Rim #B4FFFFFF
+            var normalFg = new SolidColorBrush(Color.FromArgb(0xA6, 235, 235, 245)); // macOS secondary label
+            var activeBg = new SolidColorBrush(Color.FromRgb(0x0A, 0x84, 0xFF)); // macOS accent selection
+            var activeBorder = new SolidColorBrush(Color.FromArgb(0x1A, 255, 255, 255)); // Hairline rim
             var activeFg = Brushes.White;
 
             // Reset all tab button styles to crisp muted gray with transparent background
@@ -1437,6 +1500,7 @@ namespace DynamicIsland
 
             if (_isExpanded)
             {
+                _tabSwitchGraceUntil = DateTime.Now.AddMilliseconds(900);
                 var (targetW, targetH) = GetViewDimensions(activeGrid);
                 var cubicEase = new CubicEase { EasingMode = EasingMode.EaseOut };
                 var animW = new DoubleAnimation(IslandBorder.ActualWidth, targetW, TimeSpan.FromMilliseconds(180)) { EasingFunction = cubicEase };
@@ -1481,7 +1545,7 @@ namespace DynamicIsland
                        Math.Max(ExpandedW, 700);
 
             double h = (activeGrid == ViewHome) ? 145 :
-                       (activeGrid == ViewLyrics) ? 195 :
+                       (activeGrid == ViewLyrics) ? 222 :
                        (activeGrid == ViewNook) ? 145 :
                        (activeGrid == ViewWeather) ? 155 :
                        (activeGrid == ViewScreenTime) ? 150 :
@@ -1495,6 +1559,20 @@ namespace DynamicIsland
                        (activeGrid == ViewClipboard) ? 155 :
                        (activeGrid == ViewSettings) ? 180 :
                        160;
+
+            // Grow (never shrink) to the page's real content so the bottom row is not cut off.
+            // Long scrolling pages keep their fixed height and scroll inside the island instead.
+            bool fixedHeight = activeGrid == ViewSettings || activeGrid == ViewTaskbar || activeGrid == ViewClipboard || activeGrid == ViewLyrics;
+            if (!fixedHeight && activeGrid.Visibility == Visibility.Visible)
+            {
+                try
+                {
+                    activeGrid.Measure(new Size(Math.Max(100, w - 32), double.PositiveInfinity));
+                    double needed = activeGrid.DesiredSize.Height + 56; // tab header row + margins + rounded bottom corners
+                    h = Math.Max(h, Math.Min(needed, 280));
+                }
+                catch { }
+            }
 
             return (w, h);
         }
@@ -1572,10 +1650,17 @@ namespace DynamicIsland
             {
                 if (Media?.Lyrics != null)
                 {
-                    await Media.Lyrics.LoadLyricsAsync(Media.SongTitle, Media.ArtistName, 0, forceReload: true, isAppleMusic: Media.IsAppleMusic);
+                    await Media.Lyrics.LoadLyricsAsync(Media.SongTitle, Media.ArtistName, Media.DurationSeconds, forceReload: true, isAppleMusic: Media.IsAppleMusic);
                 }
             }
             catch { }
+        }
+
+        private void BtnLyricsTranslate_Click(object sender, RoutedEventArgs e)
+        {
+            if (Media?.Lyrics == null) return;
+            Media.Lyrics.ShowTranslation = !Media.Lyrics.ShowTranslation;
+            Lyrics_ActiveLineChanged(Media.Lyrics.ActiveIndex); // row heights changed: keep the sung line in view
         }
 
         private void BtnOffsetMinusLarge_Click(object sender, RoutedEventArgs e) => Media?.Lyrics?.AdjustOffset(-2000);
@@ -1730,16 +1815,64 @@ namespace DynamicIsland
 
         private bool _isCaffeineActive = false;
 
-        private void BtnToggleWifi_Click(object sender, RoutedEventArgs e)
+        private static readonly SolidColorBrush PillOnBrush = new SolidColorBrush(Color.FromRgb(0x0A, 0x84, 0xFF));
+        private static readonly SolidColorBrush PillOffBrush = new SolidColorBrush(Color.FromRgb(0x48, 0x48, 0x4A));
+
+        private void ApplyRadioPill(Border? pill, bool? on)
+        {
+            if (pill == null) return;
+            pill.Background = on == true ? PillOnBrush : PillOffBrush;
+            pill.Opacity = on == null ? 0.5 : 1.0;
+        }
+
+        /// <summary>Reads the real Wi-Fi / Bluetooth radio state and colours the Control Center pills accordingly.</summary>
+        private async void RefreshRadioPills()
+        {
+            try
+            {
+                var wifi = await RadioToggleService.IsOnAsync(Windows.Devices.Radios.RadioKind.WiFi);
+                var bt = await RadioToggleService.IsOnAsync(Windows.Devices.Radios.RadioKind.Bluetooth);
+                ApplyRadioPill(PillWifi, wifi);
+                ApplyRadioPill(PillBluetooth, bt);
+
+                // Settings > Bluetooth & Wi-Fi > "Nama Jaringan Wi-Fi Aktif"
+                if (TxtNookWifiSsid != null && Settings?.ShowWifiSsid != false)
+                {
+                    var (connected, ssid) = await System.Threading.Tasks.Task.Run(WifiService.GetCurrentConnection);
+                    TxtNookWifiSsid.Text = wifi == false ? "Wi-Fi mati"
+                        : connected && !string.IsNullOrWhiteSpace(ssid) ? ssid
+                        : "Tidak terhubung";
+                    TxtNookWifiSsid.ToolTip = connected ? $"Terhubung ke {ssid}" : null;
+                }
+            }
+            catch { }
+        }
+
+        private async void BtnToggleWifi_Click(object sender, RoutedEventArgs e)
+        {
+            var on = await RadioToggleService.ToggleAsync(Windows.Devices.Radios.RadioKind.WiFi);
+            if (on == null) { try { Process.Start(new ProcessStartInfo("ms-availablenetworks:") { UseShellExecute = true }); } catch { } return; }
+            ApplyRadioPill(PillWifi, on);
+            SoundManager.Play(AtollSound.Feedback);
+        }
+
+        private async void BtnToggleBluetooth_Click(object sender, RoutedEventArgs e)
+        {
+            var on = await RadioToggleService.ToggleAsync(Windows.Devices.Radios.RadioKind.Bluetooth);
+            if (on == null) { try { Process.Start(new ProcessStartInfo("ms-settings:bluetooth") { UseShellExecute = true }); } catch { } return; }
+            ApplyRadioPill(PillBluetooth, on);
+            SoundManager.Play(AtollSound.Feedback);
+        }
+
+        private void BtnToggleWifi_RightClick(object sender, MouseButtonEventArgs e)
         {
             try { Process.Start(new ProcessStartInfo("ms-availablenetworks:") { UseShellExecute = true }); } catch { }
         }
 
-        private void BtnToggleBluetooth_Click(object sender, RoutedEventArgs e)
+        private void BtnToggleBluetooth_RightClick(object sender, MouseButtonEventArgs e)
         {
             try { Process.Start(new ProcessStartInfo("ms-settings:bluetooth") { UseShellExecute = true }); } catch { }
         }
-
         private void BtnToggleCaffeine_Click(object sender, RoutedEventArgs e)
         {
             _isCaffeineActive = !_isCaffeineActive;
@@ -1751,7 +1884,7 @@ namespace DynamicIsland
             else
             {
                 NativeMethods.SetThreadExecutionState(0x80000000); // ES_CONTINUOUS
-                if (PillCaffeine != null) PillCaffeine.Background = new SolidColorBrush(Color.FromRgb(22, 22, 34));
+                if (PillCaffeine != null) PillCaffeine.Background = new SolidColorBrush(Color.FromRgb(0x48, 0x48, 0x4A));
             }
             SoundManager.Play(AtollSound.Feedback);
         }
@@ -2129,6 +2262,18 @@ namespace DynamicIsland
         private void MediaVolDown_Click(object sender, RoutedEventArgs e) => NativeMethods.SendMediaKey(NativeMethods.VK_VOLUME_DOWN);
         private void MediaVolUp_Click(object sender, RoutedEventArgs e) => NativeMethods.SendMediaKey(NativeMethods.VK_VOLUME_UP);
 
+        private static readonly SineEase _eqEase = new() { EasingMode = EasingMode.EaseInOut };
+
+        // Glide to the next bar height over one timer tick instead of jumping (macOS waveform feel)
+        private void AnimateEqBar(FrameworkElement bar, double height)
+        {
+            var anim = new DoubleAnimation(height, TimeSpan.FromMilliseconds(_eqTimer.Interval.TotalMilliseconds))
+            {
+                EasingFunction = _eqEase
+            };
+            bar.BeginAnimation(HeightProperty, anim);
+        }
+
         private void EqTimer_Tick(object? sender, EventArgs e)
         {
             // 1. Expanded Music View Equalizer
@@ -2154,17 +2299,18 @@ namespace DynamicIsland
             {
                 if (Media.IsPlaying)
                 {
-                    CompactEq1.Height = _rand.Next(3, 14);
-                    CompactEq2.Height = _rand.Next(6, 16);
-                    CompactEq3.Height = _rand.Next(4, 13);
-                    CompactEq4.Height = _rand.Next(7, 16);
+                    AnimateEqBar(CompactEq1, _rand.Next(4, 15));
+                    AnimateEqBar(CompactEq2, _rand.Next(6, 17));
+                    AnimateEqBar(CompactEq3, _rand.Next(4, 14));
+                    AnimateEqBar(CompactEq4, _rand.Next(6, 16));
                 }
                 else
                 {
-                    CompactEq1.Height = 4;
-                    CompactEq2.Height = 8;
-                    CompactEq3.Height = 5;
-                    CompactEq4.Height = 7;
+                    // Paused: bars settle into flat dots like macOS
+                    AnimateEqBar(CompactEq1, 3);
+                    AnimateEqBar(CompactEq2, 3);
+                    AnimateEqBar(CompactEq3, 3);
+                    AnimateEqBar(CompactEq4, 3);
                 }
             }
 
@@ -2173,17 +2319,17 @@ namespace DynamicIsland
             {
                 if (Media.IsPlaying)
                 {
-                    CompactLyricsEq1.Height = _rand.Next(3, 14);
-                    CompactLyricsEq2.Height = _rand.Next(6, 16);
-                    CompactLyricsEq3.Height = _rand.Next(4, 13);
-                    CompactLyricsEq4.Height = _rand.Next(7, 16);
+                    AnimateEqBar(CompactLyricsEq1, _rand.Next(4, 15));
+                    AnimateEqBar(CompactLyricsEq2, _rand.Next(6, 17));
+                    AnimateEqBar(CompactLyricsEq3, _rand.Next(4, 14));
+                    AnimateEqBar(CompactLyricsEq4, _rand.Next(6, 16));
                 }
                 else
                 {
-                    CompactLyricsEq1.Height = 4;
-                    CompactLyricsEq2.Height = 8;
-                    CompactLyricsEq3.Height = 5;
-                    CompactLyricsEq4.Height = 7;
+                    AnimateEqBar(CompactLyricsEq1, 3);
+                    AnimateEqBar(CompactLyricsEq2, 3);
+                    AnimateEqBar(CompactLyricsEq3, 3);
+                    AnimateEqBar(CompactLyricsEq4, 3);
                 }
             }
 
@@ -2419,9 +2565,7 @@ namespace DynamicIsland
         private void BtnPomoFocusMode_Click(object sender, RoutedEventArgs e)
         {
             _isStopwatchMode = false;
-            _timerSeconds = 25 * 60;
-            if (TimerDisplay != null) TimerDisplay.Text = " 25:00";
-            if (TimerModeLabel != null) TimerModeLabel.Text = "POMODORO FOCUS (25M)";
+            SetCountdownPreset(PomodoroFocusMin * 60, $"FOKUS ({PomodoroFocusMin}M)");
             if (BorderPomoFocus != null)
             {
                 BorderPomoFocus.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1E202B"));
@@ -2440,9 +2584,7 @@ namespace DynamicIsland
         private void BtnPomoStandMode_Click(object sender, RoutedEventArgs e)
         {
             _isStopwatchMode = false;
-            _timerSeconds = 10 * 60;
-            if (TimerDisplay != null) TimerDisplay.Text = " 10:00";
-            if (TimerModeLabel != null) TimerModeLabel.Text = "STAND BREAK (10M)";
+            SetCountdownPreset(10 * 60, "STAND BREAK (10M)");
             if (BorderPomoStand != null)
             {
                 BorderPomoStand.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1E202B"));
@@ -2483,6 +2625,9 @@ namespace DynamicIsland
                     if (TimerStartIcon != null) TimerStartIcon.Text = "▶";
                     if (TimerStartLabel != null) TimerStartLabel.Text = "Mulai";
                     SoundManager.Play(AtollSound.Timer);
+                    Notifications?.ShowNotification("Waktu Habis", (TimerModeLabel?.Text ?? "Timer") + " selesai.", "Timer", "#FF9F0A");
+                    _timerSeconds = _timerPresetSeconds;
+                    UpdateTimerDisplay();
                 }
             }
         }
@@ -2519,35 +2664,46 @@ namespace DynamicIsland
             }
             else
             {
-                _timerSeconds = 25 * 60;
-                if (TimerDisplay != null) TimerDisplay.Text = " 25:00";
+                _timerSeconds = _timerPresetSeconds;
+                UpdateTimerDisplay();
             }
+        }
+
+        private int _timerPresetSeconds = 25 * 60;
+        private int PomodoroFocusMin => Settings?.PomodoroWorkMin > 0 ? Settings.PomodoroWorkMin : 25;
+        private int PomodoroBreakMin => Settings?.PomodoroBreakMin > 0 ? Settings.PomodoroBreakMin : 5;
+
+        private void SetCountdownPreset(int seconds, string label)
+        {
+            _timerPresetSeconds = seconds;
+            _timerSeconds = seconds;
+            if (TimerModeLabel != null) TimerModeLabel.Text = label;
+            UpdateTimerDisplay();
+        }
+
+        private void UpdateTimerDisplay()
+        {
+            if (TimerDisplay != null) TimerDisplay.Text = $" {_timerSeconds / 60:00}:{_timerSeconds % 60:00}";
         }
 
         private void TimerSet25_Click(object sender, RoutedEventArgs e)
         {
             _isStopwatchMode = false;
-            if (TimerModeLabel != null) TimerModeLabel.Text = "POMODORO FOCUS (25M)";
-            _timerSeconds = 25 * 60;
-            if (TimerDisplay != null) TimerDisplay.Text = " 25:00";
+            SetCountdownPreset(PomodoroFocusMin * 60, $"FOKUS ({PomodoroFocusMin}M)");
             ResetTimerState();
         }
 
         private void TimerSet15_Click(object sender, RoutedEventArgs e)
         {
             _isStopwatchMode = false;
-            if (TimerModeLabel != null) TimerModeLabel.Text = "SHORT BREAK (15M)";
-            _timerSeconds = 15 * 60;
-            if (TimerDisplay != null) TimerDisplay.Text = " 15:00";
+            SetCountdownPreset(15 * 60, "ISTIRAHAT PANJANG (15M)");
             ResetTimerState();
         }
 
         private void TimerSet5_Click(object sender, RoutedEventArgs e)
         {
             _isStopwatchMode = false;
-            if (TimerModeLabel != null) TimerModeLabel.Text = "QUICK BREAK (5M)";
-            _timerSeconds = 5 * 60;
-            if (TimerDisplay != null) TimerDisplay.Text = " 05:00";
+            SetCountdownPreset(PomodoroBreakMin * 60, $"ISTIRAHAT ({PomodoroBreakMin}M)");
             ResetTimerState();
         }
 
@@ -3504,8 +3660,8 @@ namespace DynamicIsland
         public void UpdateHorizontalPosition(double percent)
         {
             _horizontalPositionPercent = Math.Clamp(percent, 0.0, 1.0);
-            double screenW = SystemParameters.PrimaryScreenWidth;
-            Left = (screenW - Width) * _horizontalPositionPercent;
+            var area = TargetScreenDip();
+            Left = area.Left + (area.Width - Width) * _horizontalPositionPercent;
         }
 
         public void SetAutoHide(bool autoHide)
@@ -3669,7 +3825,7 @@ namespace DynamicIsland
         private void HoverDwellTimer_Tick(object? sender, EventArgs e)
         {
             _hoverDwellTimer.Stop();
-            if (!_isExpanded && !_isCompactInteracting && IslandBorder.IsMouseOver && !IsGameBlockingActive())
+            if (!_isExpanded && !_isCompactInteracting && (IslandBorder.IsMouseOver || IsCursorInMagnetZone()) && !IsGameBlockingActive())
             {
                 ExpandIsland();
             }
@@ -3732,13 +3888,12 @@ namespace DynamicIsland
                 string cls = className.ToString();
                 if (cls == "Progman" || cls == "WorkerW" || cls == "Shell_TrayWnd") return false;
 
-                if (NativeMethods.GetWindowRect(fgHwnd, out var rect))
+                // Covers its whole monitor and is not just a maximized window (maximized windows
+                // also fill the screen when the taskbar is hidden by the floating dock) -> fullscreen
+                if (NativeMethods.GetWindowRect(fgHwnd, out var rect) && !IsZoomed(fgHwnd)
+                    && TryGetMonitorBounds(fgHwnd, out int mL, out int mT, out int mR, out int mB))
                 {
-                    double screenW = SystemParameters.PrimaryScreenWidth;
-                    double screenH = SystemParameters.PrimaryScreenHeight;
-
-                    // Covers entire monitor resolution -> Fullscreen game or app
-                    if (rect.Left <= 0 && rect.Top <= 0 && rect.Right >= (int)screenW && rect.Bottom >= (int)screenH)
+                    if (rect.Left <= mL && rect.Top <= mT && rect.Right >= mR && rect.Bottom >= mB)
                     {
                         return true;
                     }
@@ -3812,8 +3967,10 @@ namespace DynamicIsland
                     CollapseIsland();
                 }
 
-                // Dynamic Island stays visible on top during gaming
-                IslandBorder.Visibility = Visibility.Visible;
+                // "Hide when an app is fullscreen": tuck the island away while a detected
+                // fullscreen app / game is in front; it comes back as soon as it leaves.
+                bool hideForFullscreen = _isInGameOrFullscreen && Settings!.AutoGameMode && Settings.GameAction == "AutoHide";
+                IslandBorder.Visibility = hideForFullscreen ? Visibility.Hidden : Visibility.Visible;
                 if (Settings != null) this.Topmost = Settings.AlwaysOnTop;
                 if (helper.Handle != IntPtr.Zero)
                 {
@@ -3835,6 +3992,14 @@ namespace DynamicIsland
 
         private void ChkAutoGameMode_Click(object sender, RoutedEventArgs e)
         {
+            UpdateGameModeVisuals();
+        }
+
+        /// <summary>Re-evaluates fullscreen detection after the related settings change.</summary>
+        internal void RefreshGameMode()
+        {
+            if (Settings?.AutoGameMode == true) _isInGameOrFullscreen = DetectFullscreenOrGame();
+            else _isInGameOrFullscreen = false;
             UpdateGameModeVisuals();
         }
 
@@ -3931,12 +4096,16 @@ namespace DynamicIsland
                 if (item.AppType == NotificationAppType.Steam && !Settings.EnableSteamNotif) return;
             }
 
+            if (item.AppType == NotificationAppType.WhatsApp && Settings != null && !Settings.EnableWhatsAppNotif) return;
+
+            bool wasShowing = _isNotificationShowing;
+            int gen = ++_notifGen;
             _activeNotification = item;
             _isNotificationShowing = true;
 
             // Fill UI
             if (TxtNotifTitle != null) TxtNotifTitle.Text = item.Title;
-            if (TxtNotifSubtitle != null) TxtNotifSubtitle.Text = $" • {item.AppName}";
+            if (TxtNotifSubtitle != null) TxtNotifSubtitle.Text = item.AppName;
             if (TxtNotifBody != null) TxtNotifBody.Text = item.Message;
 
             if (NotifIconBadge != null && TxtNotifIcon != null)
@@ -3944,6 +4113,11 @@ namespace DynamicIsland
                 if (item.AppType == NotificationAppType.Discord)
                 {
                     NotifIconBadge.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#5865F2"));
+                    TxtNotifIcon.Text = "🎧";
+                }
+                else if (item.AppType == NotificationAppType.WhatsApp)
+                {
+                    NotifIconBadge.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#25D366"));
                     TxtNotifIcon.Text = "💬";
                 }
                 else if (item.AppType == NotificationAppType.Steam)
@@ -3963,30 +4137,84 @@ namespace DynamicIsland
                     }
                     TxtNotifIcon.Text = "🔔";
                 }
+
+                // Real app logos for WhatsApp / Discord (emoji stays as fallback for everything else)
+                string? logo = item.AppType == NotificationAppType.WhatsApp ? "icon_WhatsApp.png"
+                             : item.AppType == NotificationAppType.Discord ? "icon_Discord.png" : null;
+                bool logoShown = false;
+                if (NotifIconImage != null)
+                {
+                    try
+                    {
+                        if (logo != null)
+                        {
+                            NotifIconImage.Source = new System.Windows.Media.Imaging.BitmapImage(new Uri($"pack://application:,,,/Assets/{logo}", UriKind.Absolute));
+                            logoShown = true;
+                        }
+                        else if (item.AppType == NotificationAppType.Steam)
+                        {
+                            var steam = SteamLogo.Get();
+                            if (steam != null) { NotifIconImage.Source = steam; logoShown = true; }
+                        }
+                    }
+                    catch { }
+                }
+                if (NotifIconImage != null) NotifIconImage.Visibility = logoShown ? Visibility.Visible : Visibility.Collapsed;
+                TxtNotifIcon.Visibility = logoShown ? Visibility.Collapsed : Visibility.Visible;
+                if (logoShown) NotifIconBadge.Background = Brushes.Transparent;
             }
 
-            if (!_isExpanded)
+            if (!_isExpanded && NotificationBannerView != null)
             {
-                if (CompactView != null) CompactView.Visibility = Visibility.Collapsed;
-                if (NotificationBannerView != null)
+                var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+
+                if (!wasShowing)
                 {
+                    // 1) Compact content fades out quickly (the local value stays 1; Stop-fill hands it back untouched)
+                    if (CompactView != null && CompactView.Visibility == Visibility.Visible)
+                    {
+                        var fadeOut = new DoubleAnimation(CompactView.Opacity, 0, TimeSpan.FromMilliseconds(110)) { FillBehavior = FillBehavior.Stop };
+                        fadeOut.Completed += (s, e) =>
+                        {
+                            if (gen == _notifGen && _isNotificationShowing && CompactView != null)
+                                CompactView.Visibility = Visibility.Collapsed;
+                        };
+                        CompactView.BeginAnimation(OpacityProperty, fadeOut);
+                    }
+
+                    // 2) Banner drops in with a small scale + slide while the island grows (macOS-like spring)
                     NotificationBannerView.Visibility = Visibility.Visible;
                     NotificationBannerView.Opacity = 1;
+                    NotifScale.ScaleX = NotifScale.ScaleY = 1;
+                    NotifTranslate.Y = 0;
+
+                    var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(230)) { BeginTime = TimeSpan.FromMilliseconds(90), FillBehavior = FillBehavior.Stop, EasingFunction = ease };
+                    NotificationBannerView.BeginAnimation(OpacityProperty, fadeIn);
+                    var scaleIn = new DoubleAnimation(0.92, 1, TimeSpan.FromMilliseconds(340)) { BeginTime = TimeSpan.FromMilliseconds(60), FillBehavior = FillBehavior.Stop, EasingFunction = new BackEase { Amplitude = 0.35, EasingMode = EasingMode.EaseOut } };
+                    NotifScale.BeginAnimation(ScaleTransform.ScaleXProperty, scaleIn);
+                    NotifScale.BeginAnimation(ScaleTransform.ScaleYProperty, scaleIn);
+                    var slideIn = new DoubleAnimation(-8, 0, TimeSpan.FromMilliseconds(300)) { BeginTime = TimeSpan.FromMilliseconds(60), FillBehavior = FillBehavior.Stop, EasingFunction = ease };
+                    NotifTranslate.BeginAnimation(TranslateTransform.YProperty, slideIn);
+                }
+                else
+                {
+                    // A new notification replaced the one on screen: a short "refresh" pop, no collapse/expand flicker
+                    NotificationBannerView.Visibility = Visibility.Visible;
+                    NotificationBannerView.Opacity = 1;
+                    var fade = new DoubleAnimation(0.15, 1, TimeSpan.FromMilliseconds(180)) { FillBehavior = FillBehavior.Stop, EasingFunction = ease };
+                    NotificationBannerView.BeginAnimation(OpacityProperty, fade);
+                    var pop = new DoubleAnimation(0.97, 1, TimeSpan.FromMilliseconds(260)) { FillBehavior = FillBehavior.Stop, EasingFunction = new BackEase { Amplitude = 0.4, EasingMode = EasingMode.EaseOut } };
+                    NotifScale.BeginAnimation(ScaleTransform.ScaleXProperty, pop);
+                    NotifScale.BeginAnimation(ScaleTransform.ScaleYProperty, pop);
                 }
 
-                double targetWidth = (CurrentDock == IslandDock.Top) ? Math.Max(CompactW, 360) : 220;
-                double targetHeight = (CurrentDock == IslandDock.Top) ? CompactH : 40;
+                bool top = CurrentDock == IslandDock.Top;
+                double targetWidth = top ? Math.Max(CompactW, 380) : 270;
+                double targetHeight = top ? Math.Max(CompactH + 28, 64) : 62;
 
-                var cubicEase = new CubicEase { EasingMode = EasingMode.EaseOut };
-                var animW = new DoubleAnimation(IslandBorder.ActualWidth, targetWidth, TimeSpan.FromMilliseconds(220))
-                {
-                    EasingFunction = cubicEase
-                };
-                var animH = new DoubleAnimation(IslandBorder.ActualHeight, targetHeight, TimeSpan.FromMilliseconds(220))
-                {
-                    EasingFunction = cubicEase
-                };
-
+                var spring = new BackEase { Amplitude = 0.22, EasingMode = EasingMode.EaseOut };
+                var animW = new DoubleAnimation(IslandBorder.ActualWidth, targetWidth, TimeSpan.FromMilliseconds(wasShowing ? 200 : 380)) { EasingFunction = spring };
+                var animH = new DoubleAnimation(IslandBorder.ActualHeight, targetHeight, TimeSpan.FromMilliseconds(wasShowing ? 200 : 380)) { EasingFunction = spring };
                 IslandBorder.BeginAnimation(WidthProperty, animW);
                 IslandBorder.BeginAnimation(HeightProperty, animH);
             }
@@ -3995,35 +4223,60 @@ namespace DynamicIsland
             _notifDwellTimer.Start();
         }
 
+        private int _notifGen;
+
         public void DismissNotification()
         {
             _notifDwellTimer.Stop();
             if (!_isNotificationShowing) return;
             _isNotificationShowing = false;
             _activeNotification = null;
+            int gen = ++_notifGen;
 
             if (!_isExpanded)
             {
                 double targetW = (CurrentDock == IslandDock.Top) ? CompactW : 40;
                 double targetH = (CurrentDock == IslandDock.Top) ? CompactH : 152;
 
-                var cubicEase = new CubicEase { EasingMode = EasingMode.EaseOut };
-                var animW = new DoubleAnimation(IslandBorder.ActualWidth, targetW, TimeSpan.FromMilliseconds(220))
+                var cubicEase = new CubicEase { EasingMode = EasingMode.EaseInOut };
+
+                // Banner fades and shrinks slightly first, then the island closes around it
+                if (NotificationBannerView != null)
                 {
+                    var fadeOut = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(140)) { FillBehavior = FillBehavior.HoldEnd };
+                    NotificationBannerView.BeginAnimation(OpacityProperty, fadeOut);
+                    var shrink = new DoubleAnimation(1, 0.96, TimeSpan.FromMilliseconds(180)) { FillBehavior = FillBehavior.Stop };
+                    NotifScale.BeginAnimation(ScaleTransform.ScaleXProperty, shrink);
+                    NotifScale.BeginAnimation(ScaleTransform.ScaleYProperty, shrink);
+                }
+
+                var animW = new DoubleAnimation(IslandBorder.ActualWidth, targetW, TimeSpan.FromMilliseconds(300))
+                {
+                    BeginTime = TimeSpan.FromMilliseconds(70),
                     EasingFunction = cubicEase
                 };
-                var animH = new DoubleAnimation(IslandBorder.ActualHeight, targetH, TimeSpan.FromMilliseconds(220))
+                var animH = new DoubleAnimation(IslandBorder.ActualHeight, targetH, TimeSpan.FromMilliseconds(300))
                 {
+                    BeginTime = TimeSpan.FromMilliseconds(70),
                     EasingFunction = cubicEase
                 };
 
                 animW.Completed += (s, e) =>
                 {
-                    if (NotificationBannerView != null) NotificationBannerView.Visibility = Visibility.Collapsed;
+                    // A newer notification (or expanding the island) took over: leave everything as it is
+                    if (gen != _notifGen || _isNotificationShowing || _isExpanded) return;
+
+                    if (NotificationBannerView != null)
+                    {
+                        NotificationBannerView.BeginAnimation(OpacityProperty, null);
+                        NotificationBannerView.Opacity = 0;
+                        NotificationBannerView.Visibility = Visibility.Collapsed;
+                    }
                     if (!_isExpanded && CompactView != null)
                     {
                         CompactView.Visibility = Visibility.Visible;
                         CompactView.Opacity = 1;
+                        CompactView.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180)) { FillBehavior = FillBehavior.Stop });
                         if (CurrentDock == IslandDock.Top)
                         {
                             if (CompactHorizontalContainer != null) CompactHorizontalContainer.Visibility = Visibility.Visible;
@@ -4064,6 +4317,11 @@ namespace DynamicIsland
         private void MenuTestDiscord_Click(object sender, RoutedEventArgs e)
         {
             Notifications.SimulateDiscordNotification();
+        }
+
+        private void MenuTestWhatsApp_Click(object sender, RoutedEventArgs e)
+        {
+            Notifications.SimulateWhatsAppNotification();
         }
 
         private void MenuTestSteam_Click(object sender, RoutedEventArgs e)

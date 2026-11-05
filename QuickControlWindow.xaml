@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Pusat Kontrol"
         Width="360"
-        Height="420"
+        Height="440"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -13,21 +13,30 @@
         WindowStartupLocation="Manual">
 
     <Window.Resources>
-        <!-- Tile Hover Style -->
+        <!-- macOS Control Center module -->
+        <Style x:Key="CcModule" TargetType="Border">
+            <Setter Property="Background" Value="#26FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#12FFFFFF"/>
+            <Setter Property="BorderThickness" Value="0.5"/>
+            <Setter Property="CornerRadius" Value="14"/>
+        </Style>
+
+        <!-- Invisible button wrapper with a soft hover -->
         <Style x:Key="ControlTileBtn" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="14" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter/>
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="10" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Opacity" Value="0.88"/>
+                                <Setter TargetName="Bd" Property="Background" Value="#14FFFFFF"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -35,31 +44,35 @@
             </Setter>
         </Style>
 
-        <!-- Slider Style -->
+        <!-- macOS Control Center slider: thick rounded track, white fill, white knob -->
         <Style x:Key="MacSlider" TargetType="Slider">
             <Setter Property="Minimum" Value="0"/>
             <Setter Property="Maximum" Value="100"/>
             <Setter Property="SmallChange" Value="1"/>
             <Setter Property="LargeChange" Value="5"/>
+            <Setter Property="IsMoveToPointEnabled" Value="True"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Slider">
-                        <Grid VerticalAlignment="Center">
+                        <Grid VerticalAlignment="Center" Height="22">
+                            <Border Background="#2EFFFFFF" CornerRadius="11"/>
                             <Track x:Name="PART_Track">
                                 <Track.DecreaseRepeatButton>
                                     <RepeatButton Command="Slider.DecreaseLarge">
                                         <RepeatButton.Template>
                                             <ControlTemplate>
-                                                <Border Background="#FFFFFFFF" Height="8" CornerRadius="4,0,0,4"/>
+                                                <Border Background="#F2FFFFFF" Height="22" CornerRadius="11,0,0,11" Margin="0,0,-11,0"/>
                                             </ControlTemplate>
                                         </RepeatButton.Template>
                                     </RepeatButton>
                                 </Track.DecreaseRepeatButton>
                                 <Track.Thumb>
-                                    <Thumb Width="20" Height="20">
+                                    <Thumb Width="22" Height="22">
                                         <Thumb.Template>
                                             <ControlTemplate>
-                                                <Ellipse Fill="#FFFFFF">
+                                                <Ellipse Fill="#FFFFFF" Stroke="#1A000000" StrokeThickness="0.5">
                                                     <Ellipse.Effect>
                                                         <DropShadowEffect BlurRadius="6" ShadowDepth="1" Direction="270" Color="#000000" Opacity="0.35"/>
                                                     </Ellipse.Effect>
@@ -72,7 +85,7 @@
                                     <RepeatButton Command="Slider.IncreaseLarge">
                                         <RepeatButton.Template>
                                             <ControlTemplate>
-                                                <Border Background="#35FFFFFF" Height="8" CornerRadius="0,4,4,0"/>
+                                                <Border Background="Transparent"/>
                                             </ControlTemplate>
                                         </RepeatButton.Template>
                                     </RepeatButton>
@@ -86,210 +99,193 @@
     </Window.Resources>
 
     <Grid Margin="12">
-        <!-- Liquid Glass Outer Card -->
-        <Border CornerRadius="22" BorderThickness="1.2" Padding="14">
+        <!-- Dark frosted panel -->
+        <Border CornerRadius="20" BorderThickness="0.8" Padding="12" VerticalAlignment="Bottom">
             <Border.Background>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                    <GradientStop Color="#55301822" Offset="0.0"/>
-                    <GradientStop Color="#401A0E18" Offset="0.5"/>
-                    <GradientStop Color="#48100812" Offset="1.0"/>
+                    <GradientStop Color="#F02C2C30" Offset="0.0"/>
+                    <GradientStop Color="#F51C1C1F" Offset="1.0"/>
                 </LinearGradientBrush>
             </Border.Background>
             <Border.BorderBrush>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                    <GradientStop Color="#70FFFFFF" Offset="0.0"/>
-                    <GradientStop Color="#20FFFFFF" Offset="1.0"/>
+                    <GradientStop Color="#33FFFFFF" Offset="0.0"/>
+                    <GradientStop Color="#0FFFFFFF" Offset="1.0"/>
                 </LinearGradientBrush>
             </Border.BorderBrush>
             <Border.Effect>
-                <DropShadowEffect BlurRadius="22" ShadowDepth="6" Direction="270" Color="#000000" Opacity="0.45"/>
+                <DropShadowEffect BlurRadius="32" ShadowDepth="8" Direction="270" Color="#000000" Opacity="0.5"/>
             </Border.Effect>
 
             <Grid>
                 <!-- MAIN VIEW (Control Center) -->
                 <StackPanel x:Name="PanelMainView" Visibility="Visible">
-                    <!-- Row 1: Wi-Fi & Bluetooth Pills -->
-                    <Grid Height="60">
+                    <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="10"/>
+                            <ColumnDefinition Width="8"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
 
-                        <!-- Wi-Fi Tile -->
-                        <Button Grid.Column="0" Style="{StaticResource ControlTileBtn}" Click="BtnWifiTile_Click">
-                            <Border x:Name="BdWifiTile" Background="#FFFFFF" CornerRadius="14" Padding="10,8">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="32"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="16"/>
-                                    </Grid.ColumnDefinitions>
-                                    <!-- Wi-Fi Icon -->
-                                    <Path Grid.Column="0" Stretch="Uniform" Width="18" Height="14" Fill="#111111" x:Name="IconWifi" VerticalAlignment="Center" HorizontalAlignment="Left" Data="M12,4C7.31,4,3.07,5.9,0,8.98L12,21l12-12.02C20.93,5.9,16.69,4,12,4z"/>
-                                    <!-- Text Info -->
-                                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="2,0,0,0">
-                                        <TextBlock Text="Wi-Fi" Foreground="#111111" x:Name="TxtWifiHeader" FontWeight="Bold" FontSize="13"/>
-                                        <TextBlock Text="Tidak terhubung" Foreground="#666666" x:Name="TxtWifiStatus" FontSize="10" TextTrimming="CharacterEllipsis"/>
-                                    </StackPanel>
-                                    <!-- Arrow right -->
-                                    <TextBlock Grid.Column="2" Text="›" Foreground="#555555" x:Name="TxtWifiArrow" FontSize="16" FontWeight="Bold" VerticalAlignment="Center" HorizontalAlignment="Right"/>
-                                </Grid>
-                            </Border>
-                        </Button>
+                        <!-- Connectivity module: Wi-Fi + Bluetooth -->
+                        <Border Grid.Column="0" Style="{StaticResource CcModule}" Padding="4">
+                            <StackPanel>
+                                <Button Style="{StaticResource ControlTileBtn}" Padding="6" Click="BtnWifiTile_Click">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border x:Name="BdWifiTile" Width="30" Height="30" CornerRadius="15" Background="#0A84FF">
+                                            <Path x:Name="IconWifi" Stretch="Uniform" Width="14" Height="11" Fill="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" Data="M12,4C7.31,4,3.07,5.9,0,8.98L12,21l12-12.02C20.93,5.9,16.69,4,12,4z"/>
+                                        </Border>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="9,0,0,0">
+                                            <TextBlock x:Name="TxtWifiHeader" Text="Wi-Fi" Foreground="#FFFFFF" FontWeight="SemiBold" FontSize="12"/>
+                                            <TextBlock x:Name="TxtWifiStatus" Text="Tidak terhubung" Foreground="#99EBEBF5" FontSize="10" TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="TxtWifiArrow" Grid.Column="2" Text="&#xE76C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Foreground="#73EBEBF5" FontSize="9" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </Button>
+                                <Button Style="{StaticResource ControlTileBtn}" Padding="6" Click="BtnBluetoothTile_Click">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border x:Name="BdBtTile" Width="30" Height="30" CornerRadius="15" Background="#0A84FF">
+                                            <Path x:Name="IconBt" Stretch="Uniform" Width="10" Height="14" Fill="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" Data="M14.24,12.01L19,7.24l-6.5-6.5C12.12,0.36,11.5,0.78,11.5,1.31v8.83L6.84,5.49L5.43,6.9l5.66,5.66l-5.66,5.66l1.41,1.41L11.5,15v8.130c0,0.53,0.62,0.95,1,0.57l6.5-6.5L14.24,12.01z M13.5,3.95l3.05,3.05l-3.05,3.05V3.95z M13.5,19.24v-6.1l3.05,3.05L13.5,19.24z"/>
+                                        </Border>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="9,0,0,0">
+                                            <TextBlock x:Name="TxtBtHeader" Text="Bluetooth" Foreground="#FFFFFF" FontWeight="SemiBold" FontSize="12"/>
+                                            <TextBlock x:Name="TxtBtStatus" Text="Nyala" Foreground="#99EBEBF5" FontSize="10"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="TxtBtArrow" Grid.Column="2" Text="" Foreground="#73EBEBF5" FontSize="9" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </Button>
+                            </StackPanel>
+                        </Border>
 
-                        <!-- Bluetooth Tile -->
-                        <Button Grid.Column="2" Style="{StaticResource ControlTileBtn}" Click="BtnBluetoothTile_Click">
-                            <Border x:Name="BdBtTile" Background="#FFFFFF" CornerRadius="14" Padding="10,8">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="28"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="16"/>
-                                    </Grid.ColumnDefinitions>
-                                    <!-- Bluetooth Icon -->
-                                    <Path Grid.Column="0" Stretch="Uniform" Width="14" Height="16" Fill="#111111" x:Name="IconBt" VerticalAlignment="Center" HorizontalAlignment="Left" Data="M14.24,12.01L19,7.24l-6.5-6.5C12.12,0.36,11.5,0.78,11.5,1.31v8.83L6.84,5.49L5.43,6.9l5.66,5.66l-5.66,5.66l1.41,1.41L11.5,15v8.13c0,0.53,0.62,0.95,1,0.57l6.5-6.5L14.24,12.01z M13.5,3.95l3.05,3.05l-3.05,3.05V3.95z M13.5,19.24v-6.1l3.05,3.05L13.5,19.24z"/>
-                                    <!-- Text Info -->
-                                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="2,0,0,0">
-                                        <TextBlock Text="Bluetooth" x:Name="TxtBtHeader" Foreground="#111111" FontWeight="Bold" FontSize="13"/>
-                                        <TextBlock Text="Nyala" Foreground="#666666" x:Name="TxtBtStatus" FontSize="10"/>
-                                    </StackPanel>
-                                    <!-- Arrow right -->
-                                    <TextBlock Grid.Column="2" Text=">" Foreground="#555555" x:Name="TxtBtArrow" FontSize="16" FontWeight="Bold" VerticalAlignment="Center" HorizontalAlignment="Right"/>
-                                </Grid>
+                        <!-- Right column: Focus + Battery saver modules -->
+                        <Grid Grid.Column="2">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="8"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <Border Grid.Row="0" Style="{StaticResource CcModule}" Padding="3">
+                                <Button Style="{StaticResource ControlTileBtn}" Padding="6,4" Click="BtnDndTile_Click" VerticalAlignment="Stretch">
+                                    <Grid VerticalAlignment="Center">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border x:Name="BdDndTile" Width="30" Height="30" CornerRadius="15" Background="#48484A">
+                                            <Path Stretch="Uniform" Width="12" Height="12" Fill="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" Data="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z"/>
+                                        </Border>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="9,0,0,0">
+                                            <TextBlock Text="Fokus" Foreground="#FFFFFF" FontWeight="SemiBold" FontSize="12"/>
+                                            <TextBlock x:Name="TxtDndStatus" Text="Mati" Foreground="#99EBEBF5" FontSize="10"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </Button>
                             </Border>
-                        </Button>
+
+                            <Border Grid.Row="2" x:Name="BdBatSaverTile" Style="{StaticResource CcModule}" Padding="3">
+                                <Button Style="{StaticResource ControlTileBtn}" Padding="6,4" Click="BtnBatterySaver_Click" VerticalAlignment="Stretch">
+                                    <Grid VerticalAlignment="Center">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Border Width="30" Height="30" CornerRadius="15" Background="#48484A">
+                                            <Path Stretch="Uniform" Width="12" Height="12" Fill="#FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center" Data="M17,8C8,10,5.9,16.17,3.82,21.34L5.71,22l1-2.3A4.49,4.49,0,0,0,8,20C19,20,22,3,22,3,21,5,14,5.25,9,6.25V8c4-0.5,8-0.5,8,0z"/>
+                                        </Border>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="9,0,0,0">
+                                            <TextBlock Text="Hemat Baterai" Foreground="#FFFFFF" FontWeight="SemiBold" FontSize="12" TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock Text="Buka pengaturan" Foreground="#99EBEBF5" FontSize="10" TextTrimming="CharacterEllipsis"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </Button>
+                            </Border>
+                        </Grid>
                     </Grid>
 
-                    <!-- Row 2: Jangan Ganggu & Hemat Baterai Pills -->
-                    <Grid Height="60" Margin="0,10,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="10"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-
-                        <!-- Jangan Ganggu (DND) -->
-                        <Button Grid.Column="0" Style="{StaticResource ControlTileBtn}" Click="BtnDndTile_Click">
-                            <Border x:Name="BdDndTile" Background="#28FFFFFF" CornerRadius="14" Padding="10,8">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="28"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <!-- Moon icon -->
-                                    <Path Grid.Column="0" Stretch="Uniform" Width="14" Height="14" Fill="#FFFFFF" VerticalAlignment="Center" HorizontalAlignment="Left" Data="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z"/>
-                                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="2,0,0,0">
-                                        <TextBlock Text="Jangan ganggu" Foreground="#FFFFFF" FontWeight="Bold" FontSize="12"/>
-                                        <TextBlock Text="Mati" Foreground="#B0BBD0" x:Name="TxtDndStatus" FontSize="10"/>
-                                    </StackPanel>
-                                </Grid>
-                            </Border>
-                        </Button>
-
-                        <!-- Hemat Baterai (Battery Saver) -->
-                        <Button Grid.Column="2" Style="{StaticResource ControlTileBtn}" Click="BtnBatterySaver_Click">
-                            <Border x:Name="BdBatSaverTile" Background="#28FFFFFF" CornerRadius="14" Padding="10,8">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="28"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <!-- Leaf / Eco icon -->
-                                    <Path Grid.Column="0" Stretch="Uniform" Width="14" Height="14" Fill="#FFFFFF" VerticalAlignment="Center" HorizontalAlignment="Left" Data="M17,8C8,10,5.9,16.17,3.82,21.34L5.71,22l1-2.3A4.49,4.49,0,0,0,8,20C19,20,22,3,22,3,21,5,14,5.25,9,6.25V8c4-0.5,8-0.5,8,0z"/>
-                                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="2,0,0,0">
-                                        <TextBlock Text="Hemat baterai" Foreground="#FFFFFF" FontWeight="Bold" FontSize="12"/>
-                                        <TextBlock Text="Mati · buka pengaturan" Foreground="#B0BBD0" FontSize="9.5" TextTrimming="CharacterEllipsis"/>
-                                    </StackPanel>
-                                </Grid>
-                            </Border>
-                        </Button>
-                    </Grid>
-
-                    <!-- Divider -->
-                    <Rectangle Height="1" Fill="#20FFFFFF" Margin="0,14,0,10"/>
-
-                    <!-- Sliders Section -->
-                    <!-- Volume Slider -->
-                    <Grid Height="34" Margin="4,2">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="24"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="34"/>
-                            <ColumnDefinition Width="14"/>
-                        </Grid.ColumnDefinitions>
-                        <Path Grid.Column="0" Stretch="Uniform" Width="14" Height="14" Fill="#FFFFFF" VerticalAlignment="Center" Data="M3,9v6h4l5,5V4L7,9H3zm13.5,3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73,2.5-2.25,2.5-4.02z"/>
-                        <Slider Grid.Column="1" x:Name="SliderVolume" Style="{StaticResource MacSlider}" Margin="8,0" ValueChanged="SliderVolume_ValueChanged"/>
-                        <TextBlock Grid.Column="2" x:Name="TxtVolumeVal" Text="12" Foreground="#FFFFFF" FontSize="12" FontWeight="Bold" VerticalAlignment="Center" HorizontalAlignment="Right"/>
-                        <TextBlock Grid.Column="3" Text="›" Foreground="#88FFFFFF" FontSize="14" FontWeight="Bold" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="2,-2,0,0"/>
-                    </Grid>
-
-                    <!-- Brightness Slider -->
-                    <Grid Height="34" Margin="4,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="24"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="34"/>
-                        </Grid.ColumnDefinitions>
-                        <Path Grid.Column="0" Stretch="Uniform" Width="16" Height="16" Fill="#FFFFFF" VerticalAlignment="Center" Data="M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5 5-2.24,5-5-2.24-5-5-5zM2,13h2c0.55,0,1-0.45,1-1s-0.45-1-1-1H2c-0.55,0-1,0.45-1,1s0.45,1,1,1zm18,0h2c0.55,0,1-0.45,1-1s-0.45-1-1-1h-2c-0.55,0-1,0.45-1,1s0.45,1,1,1zM11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1s-1,0.45-1,1zm0,18v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1s-1,0.45-1,1z"/>
-                        <Slider Grid.Column="1" x:Name="SliderBrightness" Style="{StaticResource MacSlider}" Margin="8,0" ValueChanged="SliderBrightness_ValueChanged"/>
-                        <TextBlock Grid.Column="2" x:Name="TxtBrightnessVal" Text="23" Foreground="#FFFFFF" FontSize="12" FontWeight="Bold" VerticalAlignment="Center" HorizontalAlignment="Right"/>
-                    </Grid>
-
-                    <!-- Divider -->
-                    <Rectangle Height="1" Fill="#20FFFFFF" Margin="0,10,0,10"/>
-
-                    <!-- Footer: Battery Status + Settings Gear -->
-                    <Grid Height="30" Margin="4,0">
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <Border BorderBrush="#34C759" BorderThickness="1.2" CornerRadius="3" Width="20" Height="11" Padding="1" VerticalAlignment="Center" Margin="0,0,6,0">
-                                <Border Background="#34C759" CornerRadius="1" x:Name="BdPowerBar" Width="14" HorizontalAlignment="Left"/>
-                            </Border>
-                            <TextBlock x:Name="TxtBatteryPercent" Text="86%" Foreground="#FFFFFF" FontWeight="Bold" FontSize="12" VerticalAlignment="Center"/>
-                            <TextBlock x:Name="TxtBatteryState" Text="  mengisi daya" Foreground="#C8D4E5" FontSize="11" VerticalAlignment="Center"/>
+                    <!-- Display module -->
+                    <Border Style="{StaticResource CcModule}" Padding="12,9,12,11" Margin="0,8,0,0">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,7">
+                                <TextBlock Text="Layar" Foreground="#FFFFFF" FontWeight="SemiBold" FontSize="12"/>
+                                <TextBlock x:Name="TxtBrightnessVal" Text="23" Foreground="#99EBEBF5" FontSize="11" HorizontalAlignment="Right"/>
+                            </Grid>
+                            <Grid>
+                                <Slider x:Name="SliderBrightness" Style="{StaticResource MacSlider}" ValueChanged="SliderBrightness_ValueChanged"/>
+                                <Path Stretch="Uniform" Width="12" Height="12" Fill="#8E8E93" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="6,0,0,0" IsHitTestVisible="False" Data="M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5 5-2.24,5-5-2.24-5-5-5zM2,13h2c0.55,0,1-0.45,1-1s-0.45-1-1-1H2c-0.55,0-1,0.45-1,1s0.45,1,1,1zm18,0h2c0.55,0,1-0.45,1-1s-0.45-1-1-1h-2c-0.55,0-1,0.45-1,1s0.45,1,1,1zM11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1s-1,0.45-1,1zm0,18v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1s-1,0.45-1,1z"/>
+                            </Grid>
                         </StackPanel>
+                    </Border>
 
-                        <!-- Settings Gear Button -->
-                        <Button HorizontalAlignment="Right" VerticalAlignment="Center" Background="Transparent" BorderThickness="0" Cursor="Hand" Click="BtnOpenSettings_Click">
-                            <Path Stretch="Uniform" Width="16" Height="16" Fill="#B0BBD0" Data="M19.14,12.94c0.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24,0-.43.17-.47.41l-.36,2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47,0-.59.22L2.74,8.87c-.12.21-.08.47.12.61l2.03,1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03,1.58c-.18.14-.23.41-.12.61l1.92,3.32c.12.22.37.29.59.22l2.39-.96c.5.38,1.03.7,1.62.94l.36,2.54c.05.24.24.41.48.41h3.84c.24,0,.44-.17.47-.41l.36-2.54c.59-.24,1.13-.56,1.62-.94l2.39.96c.22.08.47,0,.59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12,15.6c-1.98,0-3.6-1.62-3.6-3.6s1.62-3.6,3.6-3.6 3.6,1.62,3.6,3.6-1.62,3.6-3.6,3.6z"/>
+                    <!-- Sound module -->
+                    <Border Style="{StaticResource CcModule}" Padding="12,9,12,11" Margin="0,8,0,0">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,7">
+                                <TextBlock Text="Suara" Foreground="#FFFFFF" FontWeight="SemiBold" FontSize="12"/>
+                                <TextBlock x:Name="TxtVolumeVal" Text="12" Foreground="#99EBEBF5" FontSize="11" HorizontalAlignment="Right"/>
+                            </Grid>
+                            <Grid>
+                                <Slider x:Name="SliderVolume" Style="{StaticResource MacSlider}" ValueChanged="SliderVolume_ValueChanged"/>
+                                <Path Stretch="Uniform" Width="12" Height="11" Fill="#8E8E93" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="6,0,0,0" IsHitTestVisible="False" Data="M3,9v6h4l5,5V4L7,9H3zm13.5,3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73,2.5-2.25,2.5-4.02z"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Footer: battery + settings -->
+                    <Grid Height="30" Margin="6,10,4,0">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border BorderBrush="#99EBEBF5" BorderThickness="1" CornerRadius="3" Width="22" Height="11" Padding="1" VerticalAlignment="Center" Margin="0,0,6,0">
+                                <Border x:Name="BdPowerBar" Background="#30D158" CornerRadius="1.5" Width="14" HorizontalAlignment="Left"/>
+                            </Border>
+                            <TextBlock x:Name="TxtBatteryPercent" Text="86%" Foreground="#FFFFFF" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="TxtBatteryState" Text="  mengisi daya" Foreground="#99EBEBF5" FontSize="11" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Button HorizontalAlignment="Right" VerticalAlignment="Center" Style="{StaticResource ControlTileBtn}" Padding="5" Click="BtnOpenSettings_Click" ToolTip="Pengaturan">
+                            <TextBlock Text="&#xE713;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14" Foreground="#99EBEBF5"/>
                         </Button>
                     </Grid>
                 </StackPanel>
 
                 <!-- WIFI DETAIL VIEW (Flyout with available networks) -->
-                <Grid x:Name="PanelWifiView" Visibility="Collapsed">
+                <Grid x:Name="PanelWifiView" Visibility="Collapsed" Height="330">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="36"/>
                         <RowDefinition Height="*"/>
-                        <RowDefinition Height="36"/>
+                        <RowDefinition Height="38"/>
                     </Grid.RowDefinitions>
 
-                    <!-- Header Back Button -->
                     <Grid Grid.Row="0">
-                        <Button HorizontalAlignment="Left" Background="Transparent" BorderThickness="0" Cursor="Hand" Click="BtnBackToMain_Click">
+                        <Button HorizontalAlignment="Left" Style="{StaticResource ControlTileBtn}" Padding="6,3" Click="BtnBackToMain_Click">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="‹" Foreground="#FFFFFF" FontSize="20" FontWeight="Bold" Margin="0,-4,6,0"/>
-                                <TextBlock Text="Kembali" Foreground="#FFFFFF" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                <TextBlock Text="&#xE76B;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Foreground="#0A84FF" FontSize="11" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                <TextBlock Text="Kembali" Foreground="#0A84FF" FontSize="12.5" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
-                        <TextBlock Text="Wi-Fi" Foreground="#FFFFFF" FontSize="14" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        <!-- Refresh Button -->
-                        <Button HorizontalAlignment="Right" Background="Transparent" BorderThickness="0" Cursor="Hand" Click="BtnRefreshWifi_Click">
-                            <TextBlock Text="⟳" Foreground="#FFFFFF" FontSize="16" FontWeight="Bold"/>
+                        <TextBlock Text="Wi-Fi" Foreground="#FFFFFF" FontSize="13" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        <Button HorizontalAlignment="Right" Style="{StaticResource ControlTileBtn}" Padding="6,4" Click="BtnRefreshWifi_Click" ToolTip="Muat ulang">
+                            <TextBlock Text="&#xE72C;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" Foreground="#99EBEBF5" FontSize="13"/>
                         </Button>
                     </Grid>
 
-                    <!-- Network List -->
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,6">
                         <StackPanel x:Name="PanelWifiList">
                             <!-- Populated in code-behind -->
                         </StackPanel>
                     </ScrollViewer>
 
-                    <!-- Footer: Open Windows Network Settings -->
-                    <Button Grid.Row="2" Style="{StaticResource ControlTileBtn}" Click="BtnOpenFullWifiSettings_Click" HorizontalAlignment="Stretch">
-                        <Border Background="#25FFFFFF" CornerRadius="10" Padding="8,4">
-                            <TextBlock Text="Pengaturan Jaringan Lainnya..." Foreground="#B0BBD0" FontSize="11" HorizontalAlignment="Center"/>
+                    <Button Grid.Row="2" Style="{StaticResource ControlTileBtn}" Click="BtnOpenFullWifiSettings_Click" HorizontalAlignment="Stretch" Padding="0">
+                        <Border Style="{StaticResource CcModule}" Padding="8,7">
+                            <TextBlock Text="Pengaturan Jaringan Lainnya..." Foreground="#FFFFFF" FontSize="11.5" HorizontalAlignment="Center"/>
                         </Border>
                     </Button>
                 </Grid>

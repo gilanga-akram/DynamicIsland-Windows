@@ -1,4 +1,4 @@
-// Language: C#
+﻿// Language: C#
 // Filename: SystemMetrics.cs
 // Runs on: Windows 10 / Windows 11 (.NET 9.0-windows)
 // Targets: Real-time telemetry for CPU, Memory, GPU, FPS (Task Manager style 60-second scrolling graph)
@@ -16,7 +16,7 @@ using System.Windows.Threading;
 
 namespace DynamicIsland
 {
-    public class SystemMetrics : INotifyPropertyChanged
+    public partial class SystemMetrics : INotifyPropertyChanged
     {
         public static SystemMetrics? Instance { get; private set; }
         private readonly DispatcherTimer _timer;
@@ -70,24 +70,24 @@ namespace DynamicIsland
         private string _currentDateString = "";
         private string _monthName = "";
         private string _todayScheduleText = "Nothing for today";
-        private string _temperatureText = "28°";
+        private string _temperatureText = "--°";
         private List<CalendarDay> _currentWeekDays = new();
 
         // Dashboard & Weather (Matches Threads/Atoll/Poni Reference)
         private int _dayPercentage = 40;
-        private string _dayPassedText = "7h 25m until bedtime";
+        private string _dayPassedText = "";
         private string _weatherLocation = "JAKARTA";
-        private string _weatherCondition = "Light drizzle";
-        private string _weatherTemp = "32°";
-        private string _weatherHighLow = "H: 33° - L: 26°";
-        private string _weatherFeelsLike = "Feels 37°";
+        private string _weatherCondition = "Memuat cuaca...";
+        private string _weatherTemp = "--°";
+        private string _weatherHighLow = "";
+        private string _weatherFeelsLike = "";
         private string _weatherSubtitle = "Jakarta, Indonesia";
-        private string _weatherHumidity = "87%";
-        private string _weatherWind = "10 km/h";
-        private string _weatherUv = "UV 7";
-        private string _weatherPressure = "1010 hPa";
-        private string _weatherSunrise = "5:37 AM";
-        private string _weatherSunset = "5:45 PM";
+        private string _weatherHumidity = "--";
+        private string _weatherWind = "--";
+        private string _weatherUv = "UV --";
+        private string _weatherPressure = "--";
+        private string _weatherSunrise = "--:--";
+        private string _weatherSunset = "--:--";
         private string _headerDateFormatted = "";
         private string _headerTimeFormatted = "";
 
@@ -483,6 +483,7 @@ namespace DynamicIsland
                 Interval = TimeSpan.FromSeconds(1) // 1 second updates matching Task Manager
             };
             _timer.Tick += (s, e) => UpdateAllMetrics();
+            StartWeather();
             _timer.Start();
 
             // Background worker for real GPU metrics & FPS via nvidia-smi
@@ -541,6 +542,34 @@ namespace DynamicIsland
             ActiveLinePoints = linePts;
         }
 
+        private void UpdateDayProgress(DateTime now)
+        {
+            int startH = SettingsManager.Instance?.WorkdayStartHour ?? 9;
+            int endH = SettingsManager.Instance?.WorkdayEndHour ?? 18;
+            if (endH <= startH) endH = Math.Min(23, startH + 8);
+            DateTime start = now.Date.AddHours(startH);
+            DateTime end = now.Date.AddHours(endH);
+
+            if (now < start)
+            {
+                DayPercentage = 0;
+                var left = start - now;
+                DayPassedText = $"Kerja mulai {(int)left.TotalHours}j {left.Minutes}m lagi";
+            }
+            else if (now < end)
+            {
+                double pct = (now - start).TotalSeconds / (end - start).TotalSeconds * 100.0;
+                DayPercentage = (int)Math.Clamp(Math.Round(pct), 1, 100);
+                var left = end - now;
+                DayPassedText = $"{(int)left.TotalHours}j {left.Minutes}m sampai jam pulang";
+            }
+            else
+            {
+                DayPercentage = 100;
+                DayPassedText = "Jam kerja selesai";
+            }
+        }
+
         private void UpdateClock()
         {
             DateTime now = DateTime.Now;
@@ -550,10 +579,8 @@ namespace DynamicIsland
             HeaderTimeFormatted = now.ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture);
             HeaderDateFormatted = now.ToString("ddd, MMM d", System.Globalization.CultureInfo.InvariantCulture);
 
-            double secondsInDay = now.TimeOfDay.TotalSeconds;
-            int dayPct = (int)Math.Clamp(Math.Round((secondsInDay / 86400.0) * 100.0), 1, 100);
-            DayPercentage = dayPct;
-            DayPassedText = "7h 25m until bedtime";
+            UpdateDayProgress(now);
+            UpdateAgendaWeek(now);
 
             var list = new List<CalendarDay>();
             DateTime start = now.Date.AddDays(-3);
@@ -611,7 +638,7 @@ namespace DynamicIsland
             {
                 ProcessCount = Process.GetProcesses().Length;
                 TimeSpan uptime = TimeSpan.FromMilliseconds(Environment.TickCount64);
-                UpTimeString = $"{uptime.Days}:{uptime.Hours:02}:{uptime.Minutes:02}:{uptime.Seconds:02}";
+                UpTimeString = $"{uptime.Days}:{uptime.Hours:00}:{uptime.Minutes:00}:{uptime.Seconds:00}";
             }
             catch { }
         }

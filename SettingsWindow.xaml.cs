@@ -1,4 +1,4 @@
-// Language: C#
+﻿// Language: C#
 // Filename: SettingsWindow.xaml.cs
 // Runs on: Windows 10 / Windows 11 (.NET 9.0-windows)
 // Targets: Dynamic Island Pro Settings Window
@@ -26,14 +26,27 @@ namespace DynamicIsland
         private bool _isInitializing = false;
         private Button? _activeNavButton;
 
+        private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+        private const int DWMWA_BORDER_COLOR = 34;
+
+        // Back / forward history of visited panes (toolbar chevrons)
+        private readonly System.Collections.Generic.List<Button> _history = new();
+        private int _historyIndex = -1;
+
         public SettingsWindow(MainWindow mainWindow, SettingsManager settings)
         {
             _mainWindow = mainWindow;
             _settings = settings;
+            // Combo boxes and sliders raise their change events while the XAML is parsed
+            // (default IsSelected / Value). Without this guard those defaults overwrote the
+            // saved settings every time the window was opened.
+            _isInitializing = true;
             InitializeComponent();
 
             SourceInitialized += SettingsWindow_SourceInitialized;
-                        Loaded += SettingsWindow_Loaded;
+            Loaded += SettingsWindow_Loaded;
+            StateChanged += (s, e) => RootGrid.Margin = WindowState == WindowState.Maximized ? new Thickness(7) : new Thickness(0);
+            PreviewKeyDown += SettingsWindow_PreviewKeyDown;
             Closed += (s, e) => MainWindow.TrimAppMemory();
         }
 
@@ -44,8 +57,123 @@ namespace DynamicIsland
                 var handle = new WindowInteropHelper(this).Handle;
                 int darkMode = 1;
                 DwmSetWindowAttribute(handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref darkMode, sizeof(int));
+                int round = 2; // DWMWCP_ROUND: macOS-like rounded window corners
+                DwmSetWindowAttribute(handle, DWMWA_WINDOW_CORNER_PREFERENCE, ref round, sizeof(int));
+                int border = 0x00403E3C; // COLORREF (BGR): subtle light hairline like a macOS dark window
+                DwmSetWindowAttribute(handle, DWMWA_BORDER_COLOR, ref border, sizeof(int));
             }
             catch { }
+        }
+
+        // ==========================================
+        // WINDOW CHROME (traffic lights) & SHORTCUTS
+        // ==========================================
+        private void BtnWinClose_Click(object sender, RoutedEventArgs e) => Close();
+        private void BtnWinMin_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+        private void BtnWinMax_Click(object sender, RoutedEventArgs e) =>
+            WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+        private void SettingsWindow_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+            if (ctrl && e.Key == Key.F) { TxtSearch?.Focus(); TxtSearch?.SelectAll(); e.Handled = true; }
+            else if (ctrl && e.Key == Key.W) { Close(); e.Handled = true; }
+            else if ((Keyboard.Modifiers & ModifierKeys.Alt) != 0 && e.SystemKey == Key.Left) { BtnNavBack_Click(this, e); e.Handled = true; }
+            else if ((Keyboard.Modifiers & ModifierKeys.Alt) != 0 && e.SystemKey == Key.Right) { BtnNavForward_Click(this, e); e.Handled = true; }
+        }
+
+        private void PageScroller_ScrollChanged(object sender, ScrollChangedEventArgs e)
+        {
+            // macOS shows the toolbar separator only once content scrolls underneath it
+            if (ToolbarLine != null) ToolbarLine.Opacity = PageScroller.VerticalOffset > 1 ? 1 : 0;
+        }
+
+        // ==========================================
+        // SIDEBAR SEARCH
+        // ==========================================
+        private (Button nav, FrameworkElement page)[] NavPages => new (Button, FrameworkElement)[]
+        {
+            (NavWelcome, PageWelcome), (NavGeneral, PageGeneral), (NavModules, PageModules),
+            (NavLiveActivities, PageLiveActivities), (NavCatBuddy, PageCatBuddy), (NavCursor, PageCursor),
+            (NavDashboard, PageDashboard), (NavMedia, PageMedia), (NavCalendar, PageCalendar),
+            (NavWeather, PageWeather), (NavPrayerTimes, PagePrayerTimes), (NavPomodoro, PagePomodoro),
+            (NavHealth, PageHealth), (NavScreenTime, PageScreenTime), (NavDayProgress, PageDayProgress),
+            (NavBluetoothWifi, PageBluetoothWifi), (NavDockApps, PageDockApps), (NavSupportCreator, PageSupportCreator)
+        };
+
+        private void TxtSearch_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            string q = TxtSearch.Text.Trim();
+            bool searching = q.Length > 0;
+            TxtSearchPlaceholder.Visibility = searching ? Visibility.Collapsed : Visibility.Visible;
+            BtnClearSearch.Visibility = searching ? Visibility.Visible : Visibility.Collapsed;
+            TxtSectionDynamic.Visibility = searching ? Visibility.Collapsed : Visibility.Visible;
+            TxtSectionModules.Visibility = searching ? Visibility.Collapsed : Visibility.Visible;
+
+            int hits = 0;
+            foreach (var (nav, page) in NavPages)
+            {
+                bool match = !searching || ContainsText(nav, q) || ContainsText(page, q);
+                nav.Visibility = match ? Visibility.Visible : Visibility.Collapsed;
+                if (match) hits++;
+            }
+            TxtSearchEmpty.Visibility = searching && hits == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void TxtSearch_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Escape) { TxtSearch.Clear(); e.Handled = true; }
+            else if (e.Key == Key.Enter)
+            {
+                // Enter opens the first matching pane
+                foreach (var (nav, _) in NavPages)
+                    if (nav.Visibility == Visibility.Visible) { ShowPage(nav, true); break; }
+                e.Handled = true;
+            }
+        }
+
+        private void BtnClearSearch_Click(object sender, RoutedEventArgs e)
+        {
+            TxtSearch.Clear();
+            TxtSearch.Focus();
+        }
+
+        /// <summary>True when any text inside the element (labels, descriptions, buttons, menu items) contains the query.</summary>
+        private static bool ContainsText(DependencyObject root, string q)
+        {
+            switch (root)
+            {
+                case TextBlock tb when tb.Text?.Contains(q, StringComparison.CurrentCultureIgnoreCase) == true:
+                    return true;
+                case ContentControl cc when cc.Content is string s && s.Contains(q, StringComparison.CurrentCultureIgnoreCase):
+                    return true;
+            }
+            foreach (var child in LogicalTreeHelper.GetChildren(root))
+                if (child is DependencyObject d && ContainsText(d, q)) return true;
+            return false;
+        }
+
+        // ==========================================
+        // TOOLBAR BACK / FORWARD
+        // ==========================================
+        private void BtnNavBack_Click(object sender, RoutedEventArgs e)
+        {
+            if (_historyIndex <= 0) return;
+            _historyIndex--;
+            ShowPage(_history[_historyIndex], false);
+        }
+
+        private void BtnNavForward_Click(object sender, RoutedEventArgs e)
+        {
+            if (_historyIndex >= _history.Count - 1) return;
+            _historyIndex++;
+            ShowPage(_history[_historyIndex], false);
+        }
+
+        private void UpdateHistoryButtons()
+        {
+            if (BtnNavBack != null) BtnNavBack.IsEnabled = _historyIndex > 0;
+            if (BtnNavForward != null) BtnNavForward.IsEnabled = _historyIndex < _history.Count - 1;
         }
 
         private void SettingsWindow_Loaded(object sender, RoutedEventArgs e)
@@ -58,11 +186,28 @@ namespace DynamicIsland
                 // ==========================================
                 if (ToggleLaunchAtLogin != null) ToggleLaunchAtLogin.IsChecked = _settings.StartWithWindows;
                 if (ToggleLockPosition != null) ToggleLockPosition.IsChecked = _settings.LockPosition;
-                if (ToggleHideFullscreen != null) ToggleHideFullscreen.IsChecked = _settings.AutoGameMode;
+                if (ToggleHideFullscreen != null) ToggleHideFullscreen.IsChecked = _settings.AutoGameMode && _settings.GameAction == "AutoHide";
+                if (TxtAppVersion != null)
+                {
+                    var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+                    TxtAppVersion.Text = v == null ? "" : $" · v{v.Major}.{v.Minor}.{Math.Max(0, v.Build)}";
+                }
                 if (ToggleAutoHide != null) ToggleAutoHide.IsChecked = _settings.AutoHide;
                 if (ToggleHideButton != null) ToggleHideButton.IsChecked = _settings.ShowHideButton;
                 if (ToggleTouchscreen != null) ToggleTouchscreen.IsChecked = _settings.TouchscreenSupport;
                 if (ToggleKeepWindowsBelow != null) ToggleKeepWindowsBelow.IsChecked = _settings.KeepWindowsBelow;
+
+                if (CmbDisplay != null)
+                {
+                    CmbDisplay.Items.Clear();
+                    CmbDisplay.Items.Add(new ComboBoxItem { Content = "Primary display" });
+                    var mons = MainWindow.GetMonitors();
+                    for (int i = 0; i < mons.Count; i++)
+                        CmbDisplay.Items.Add(new ComboBoxItem { Content = $"Monitor {i + 1}", ToolTip = $"{(int)mons[i].Bounds.Width}x{(int)mons[i].Bounds.Height}{(mons[i].Primary ? " (utama)" : "")}" });
+                    CmbDisplay.SelectedIndex = 0;
+                    foreach (ComboBoxItem it in CmbDisplay.Items)
+                        if (it.Content?.ToString() == _settings.SelectedDisplay) { CmbDisplay.SelectedItem = it; break; }
+                }
 
                 if (CmbLanguage != null)
                 {
@@ -98,6 +243,8 @@ namespace DynamicIsland
                 if (ToggleSoundEffects != null) ToggleSoundEffects.IsChecked = _settings.EnableSoundEffects;
                                 if (ToggleClipboard != null) ToggleClipboard.IsChecked = _settings.EnableClipboardManager;
                                 if (TogglePomodoroModule != null) TogglePomodoroModule.IsChecked = _settings.ShowPomodoroWidget;
+                if (ToggleQuickTools != null) ToggleQuickTools.IsChecked = _settings.ShowToolsTab;
+                if (ToggleTaskbarModule != null) ToggleTaskbarModule.IsChecked = _settings.ShowTaskbarTab;
                 if (ToggleFloatingDock != null) ToggleFloatingDock.IsChecked = _settings.EnableFloatingDock;
 
                 // ==========================================
@@ -107,6 +254,11 @@ namespace DynamicIsland
                 if (ToggleBatteryHUD != null) ToggleBatteryHUD.IsChecked = _settings.ShowBatteryHUD;
                 if (ToggleBluetoothHUD != null) ToggleBluetoothHUD.IsChecked = _settings.ShowBluetoothHUD;
                 if (ToggleVolumeHUD != null) ToggleVolumeHUD.IsChecked = _settings.ShowVolumeHUD;
+                if (ToggleNotifAll != null) ToggleNotifAll.IsChecked = _settings.EnableNotifications;
+                if (ToggleNotifWhatsApp != null) ToggleNotifWhatsApp.IsChecked = _settings.EnableWhatsAppNotif;
+                if (ToggleNotifDiscord != null) ToggleNotifDiscord.IsChecked = _settings.EnableDiscordNotif;
+                if (ToggleNotifSteam != null) ToggleNotifSteam.IsChecked = _settings.EnableSteamNotif;
+                if (ImgNotifSteam != null) ImgNotifSteam.Source = SteamLogo.Get();
 
                 // ==========================================
                 // 4. CAT BUDDY & CHARACTERS
@@ -159,43 +311,31 @@ namespace DynamicIsland
                 // ==========================================
                 // 9. WEATHER
                 // ==========================================
-                if (CmbWeatherCity != null && !string.IsNullOrEmpty(_settings.WeatherCity))
-                {
-                    foreach (ComboBoxItem item in CmbWeatherCity.Items)
-                    {
-                        if (item.Content?.ToString() == _settings.WeatherCity)
-                        {
-                            item.IsSelected = true;
-                            break;
-                        }
-                    }
-                }
-                if (CmbWeatherUnit != null && !string.IsNullOrEmpty(_settings.WeatherUnit))
-                {
-                    foreach (ComboBoxItem item in CmbWeatherUnit.Items)
-                    {
-                        if (item.Content?.ToString()?.Contains(_settings.WeatherUnit) == true)
-                        {
-                            item.IsSelected = true;
-                            break;
-                        }
-                    }
-                }
+                SelectComboItem(CmbWeatherCity, c => c == _settings.WeatherCity);
+                SelectComboItem(CmbWeatherUnit, c => !string.IsNullOrEmpty(_settings.WeatherUnit) && c.Contains(_settings.WeatherUnit));
+
+                // ==========================================
+                // CALENDAR
+                // ==========================================
+                if (CmbCalendarFirstDay != null) CmbCalendarFirstDay.SelectedIndex = _settings.CalendarWeekStartsMonday ? 0 : 1;
+                if (ToggleCalendarSync != null) ToggleCalendarSync.IsChecked = _settings.CalendarMarkToday;
+
+                // ==========================================
+                // BLUETOOTH & WI-FI
+                // ==========================================
+                if (ToggleAccBattery != null) ToggleAccBattery.IsChecked = _settings.ShowAccessoryBattery;
+                if (ToggleWifiSSID != null) ToggleWifiSSID.IsChecked = _settings.ShowWifiSsid;
+
+                // ==========================================
+                // DAY PROGRESS (work hours)
+                // ==========================================
+                FillHourCombo(CmbWorkStart, 5, 12, _settings.WorkdayStartHour > 0 ? _settings.WorkdayStartHour : 9);
+                FillHourCombo(CmbWorkEnd, 13, 23, _settings.WorkdayEndHour > 0 ? _settings.WorkdayEndHour : 18);
 
                 // ==========================================
                 // 10. PRAYER TIMES
                 // ==========================================
-                if (CmbPrayerCity != null && !string.IsNullOrEmpty(_settings.PrayerCity))
-                {
-                    foreach (ComboBoxItem item in CmbPrayerCity.Items)
-                    {
-                        if (item.Content?.ToString()?.Contains(_settings.PrayerCity) == true)
-                        {
-                            item.IsSelected = true;
-                            break;
-                        }
-                    }
-                }
+                SelectComboItem(CmbPrayerCity, c => !string.IsNullOrEmpty(_settings.PrayerCity) && (c == _settings.PrayerCity || c.Contains(_settings.PrayerCity)));
                 if (TogglePrayerNotif != null) TogglePrayerNotif.IsChecked = _settings.PrayerNotification;
 
                 // ==========================================
@@ -233,6 +373,11 @@ namespace DynamicIsland
                     if (TxtScreenLimit != null) TxtScreenLimit.Text = $"{(int)SliderScreenLimit.Value} Jam";
                 }
                 _activeNavButton = NavGeneral;
+                _history.Clear();
+                _history.Add(NavGeneral);
+                _historyIndex = 0;
+                UpdateHistoryButtons();
+                UpdateActiveHeader();
             }
             catch (Exception ex)
             {
@@ -255,8 +400,20 @@ namespace DynamicIsland
         // ==========================================
         private void NavTab_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is not Button clickedBtn) return;
+            if (sender is Button btn) ShowPage(btn, true);
+        }
+
+        private void ShowPage(Button clickedBtn, bool addToHistory)
+        {
+            if (addToHistory && clickedBtn != _activeNavButton)
+            {
+                if (_historyIndex < _history.Count - 1) _history.RemoveRange(_historyIndex + 1, _history.Count - _historyIndex - 1);
+                _history.Add(clickedBtn);
+                _historyIndex = _history.Count - 1;
+            }
+            UpdateHistoryButtons();
             _activeNavButton = clickedBtn;
+            PageScroller?.ScrollToTop();
 
             // Reset all nav button active tags
             if (NavWelcome != null) NavWelcome.Tag = null;
@@ -383,30 +540,58 @@ namespace DynamicIsland
             var loc = LocalizationManager.Instance;
             var btn = _activeNavButton ?? NavGeneral;
 
-            if (btn == NavGeneral) SetHeader("\u2699\uFE0F", loc.Get("HeaderGeneral", "General"));
-            else if (btn == NavModules) SetHeader("\uD83E\uDDE9", loc.Get("HeaderModules", "Modules & Features"));
-            else if (btn == NavLiveActivities) SetHeader("\uD83D\uDD14", loc.Get("HeaderLiveActivities", "Live Activities"));
-            else if (btn == NavCatBuddy) SetHeader("\uD83D\uDC3E", loc.Get("HeaderCatBuddy", "Cat Buddy & Characters"));
-            else if (btn == NavCursor) SetHeader("\uD83D\uDC46", loc.Get("HeaderCursor", "Cursor Interaction"));
-            else if (btn == NavDashboard) SetHeader("\uD83D\uDCD0", loc.Get("HeaderDashboard", "Ukuran Dynamic"));
-            else if (btn == NavMedia) SetHeader("\uD83C\uDFB5", loc.Get("HeaderMedia", "Media Player"));
-            else if (btn == NavCalendar) SetHeader("\uD83D\uDCC5", loc.Get("HeaderCalendar", "Calendar"));
-            else if (btn == NavWeather) SetHeader("\u26C5", loc.Get("HeaderWeather", "Weather"));
-            else if (btn == NavPrayerTimes) SetHeader("\uD83D\uDD4C", loc.Get("HeaderPrayerTimes", "Prayer Times"));
-            else if (btn == NavPomodoro) SetHeader("\uD83C\uDF45", loc.Get("HeaderPomodoro", "Pomodoro Timer"));
-            else if (btn == NavHealth) SetHeader("\uD83D\uDCA7", loc.Get("HeaderHealth", "Health & Wellness"));
-            else if (btn == NavScreenTime) SetHeader("\u23F1", loc.Get("HeaderScreenTime", "Screen Time"));
-            else if (btn == NavDayProgress) SetHeader("\uD83D\uDCCA", loc.Get("HeaderDayProgress", "Day Progress"));
-            else if (btn == NavBluetoothWifi) SetHeader("\uD83D\uDCF6", loc.Get("HeaderBluetoothWifi", "Bluetooth & Wi-Fi"));
-            else if (btn == NavWelcome) SetHeader("\uD83D\uDC4B", loc.Get("HeaderWelcome", "Welcome"));
-            else if (btn == NavSupportCreator) SetHeader("\uD83D\uDC96", loc.Get("HeaderSupportCreator", "Support Creator"));
-            else if (btn == NavDockApps) SetHeader("\u2693", "Aplikasi Dock");
+            if (btn == NavGeneral) SetHeader(btn, loc.Get("HeaderGeneral", "General"), loc.Get("HeroGeneral", "Atur posisi, perilaku dan tampilan Dynamic Island di layar."));
+            else if (btn == NavModules) SetHeader(btn, loc.Get("HeaderModules", "Modules & Features"), loc.Get("HeroModules", "Pilih modul dan fitur yang muncul di Dynamic Island dan Dock."));
+            else if (btn == NavLiveActivities) SetHeader(btn, loc.Get("HeaderLiveActivities", "Live Activities"), loc.Get("HeroLiveActivities", "Pemberitahuan langsung untuk musik, baterai, perangkat Bluetooth dan volume."));
+            else if (btn == NavCatBuddy) SetHeader(btn, loc.Get("HeaderCatBuddy", "Cat Buddy & Characters"), loc.Get("HeroCatBuddy", "Pilih karakter animasi dan tampilan saat Dynamic Island sedang diam."));
+            else if (btn == NavCursor) SetHeader(btn, loc.Get("HeaderCursor", "Cursor Interaction"), loc.Get("HeroCursor", "Atur cara Dynamic Island merespons kursor mouse."));
+            else if (btn == NavDashboard) SetHeader(btn, loc.Get("HeaderDashboard", "Ukuran Dynamic"), loc.Get("HeroDashboard", "Ubah ukuran Dynamic Island saat tertutup maupun terbuka."));
+            else if (btn == NavMedia) SetHeader(btn, loc.Get("HeaderMedia", "Media Player"), loc.Get("HeroMedia", "Pengaturan pemutar musik dan kontrol media."));
+            else if (btn == NavCalendar) SetHeader(btn, loc.Get("HeaderCalendar", "Calendar"), loc.Get("HeroCalendar", "Kalender mini dan agenda mingguan di Dynamic Island."));
+            else if (btn == NavWeather) SetHeader(btn, loc.Get("HeaderWeather", "Weather"), loc.Get("HeroWeather", "Lokasi dan satuan suhu untuk cuaca langsung (Open-Meteo)."));
+            else if (btn == NavPrayerTimes) SetHeader(btn, loc.Get("HeaderPrayerTimes", "Prayer Times"), loc.Get("HeroPrayerTimes", "Jadwal sholat harian dan pengingat waktu sholat."));
+            else if (btn == NavPomodoro) SetHeader(btn, loc.Get("HeaderPomodoro", "Pomodoro Timer"), loc.Get("HeroPomodoro", "Durasi sesi fokus dan istirahat untuk timer Pomodoro."));
+            else if (btn == NavHealth) SetHeader(btn, loc.Get("HeaderHealth", "Health & Wellness"), loc.Get("HeroHealth", "Pengingat minum air, postur duduk dan istirahat mata."));
+            else if (btn == NavScreenTime) SetHeader(btn, loc.Get("HeaderScreenTime", "Screen Time"), loc.Get("HeroScreenTime", "Lacak pemakaian aplikasi dan batasi waktu layar harian."));
+            else if (btn == NavDayProgress) SetHeader(btn, loc.Get("HeaderDayProgress", "Day Progress"), loc.Get("HeroDayProgress", "Jam kerja yang dipakai untuk menghitung progres harimu."));
+            else if (btn == NavBluetoothWifi) SetHeader(btn, loc.Get("HeaderBluetoothWifi", "Bluetooth & Wi-Fi"), loc.Get("HeroBluetoothWifi", "Info perangkat nirkabel dan jaringan Wi-Fi di Dynamic Island."));
+            else if (btn == NavWelcome) SetHeader(btn, loc.Get("HeaderWelcome", "Welcome"), loc.Get("HeroWelcome", "Kenalan dengan Dynamic Island Pro dan pintasan-pintasannya."));
+            else if (btn == NavSupportCreator) SetHeader(btn, loc.Get("HeaderSupportCreator", "Support Creator"), loc.Get("SupportDesc", "Dukung pengembangan Dynamic Island Pro."));
+            else if (btn == NavDockApps) SetHeader(btn, "Aplikasi Dock", "Atur aplikasi, urutan dan ikon yang tampil di Dock melayang.");
         }
 
-        private void SetHeader(string icon, string title)
+        /// <summary>Toolbar title + page hero. The hero reuses the colour tile and glyph of the sidebar row.</summary>
+        private void SetHeader(Button nav, string title, string description)
         {
-            if (HeaderIconText != null) HeaderIconText.Text = icon;
             if (HeaderTitleText != null) HeaderTitleText.Text = title;
+            if (HeroTitle != null) HeroTitle.Text = title;
+            if (HeroDesc != null) HeroDesc.Text = description;
+
+            if (nav == NavWelcome)
+            {
+                // the Welcome pane is the profile card: show the app logo instead of a glyph tile
+                if (HeroIconBox != null)
+                {
+                    HeroIconBox.Background = new ImageBrush(new BitmapImage(new Uri("pack://application:,,,/DynamicIsland;component/Assets/logo.png"))) { Stretch = Stretch.Uniform };
+                    HeroIconBox.CornerRadius = new CornerRadius(26);
+                }
+                if (HeroIconGlyph != null) HeroIconGlyph.Text = "";
+                return;
+            }
+
+            if (nav.Content is StackPanel sp && sp.Children.Count > 0 && sp.Children[0] is Border tile && tile.Child is TextBlock glyph)
+            {
+                if (HeroIconBox != null)
+                {
+                    HeroIconBox.Background = tile.Background;
+                    HeroIconBox.CornerRadius = new CornerRadius(12);
+                }
+                if (HeroIconGlyph != null)
+                {
+                    HeroIconGlyph.Text = glyph.Text;
+                    HeroIconGlyph.Foreground = glyph.Foreground;
+                }
+            }
         }
         // 1. GENERAL CONTROLS
         // ==========================================
@@ -417,14 +602,18 @@ namespace DynamicIsland
 
         private void CmbDisplay_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (_isInitializing) return;
             if (_settings != null && CmbDisplay?.SelectedItem is ComboBoxItem item)
             {
                 _settings.SelectedDisplay = item.Content?.ToString() ?? "Primary display";
+                _mainWindow?.ApplyDockLayout();
+                _mainWindow?.ApplyKeepWindowsBelow();
             }
         }
 
         private void SliderPosition_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
+            if (_isInitializing) return;
             if (TxtPositionPercent != null)
             {
                 TxtPositionPercent.Text = $"{(int)e.NewValue}%";
@@ -461,7 +650,11 @@ namespace DynamicIsland
 
         private void ToggleHideFullscreen_Click(object sender, RoutedEventArgs e)
         {
-            if (_settings != null) _settings.AutoGameMode = ToggleHideFullscreen.IsChecked == true;
+            if (_settings == null) return;
+            bool hide = ToggleHideFullscreen.IsChecked == true;
+            if (hide) _settings.AutoGameMode = true;      // fullscreen detection must run
+            _settings.GameAction = hide ? "AutoHide" : "IgnoreHover";
+            _mainWindow?.RefreshGameMode();
         }
 
         private void ToggleAutoHide_Click(object sender, RoutedEventArgs e)
@@ -489,7 +682,9 @@ namespace DynamicIsland
 
         private void ToggleKeepWindowsBelow_Click(object sender, RoutedEventArgs e)
         {
-            if (_settings != null) _settings.KeepWindowsBelow = ToggleKeepWindowsBelow.IsChecked == true;
+            if (_settings == null) return;
+            _settings.KeepWindowsBelow = ToggleKeepWindowsBelow.IsChecked == true;
+            _mainWindow?.ApplyKeepWindowsBelow();
         }
 
         // ==========================================
@@ -507,16 +702,21 @@ namespace DynamicIsland
         private void ToggleClipboard_Click(object sender, RoutedEventArgs e)
         {
             if (_settings != null) _settings.EnableClipboardManager = ToggleClipboard.IsChecked == true;
+            _mainWindow?.ApplyTabVisibility();
         }
 
         private void ToggleQuickTools_Click(object sender, RoutedEventArgs e)
         {
-            // Toggles Quick Tools display in ribbon
+            if (_settings == null) return;
+            _settings.ShowToolsTab = ToggleQuickTools.IsChecked == true;
+            _mainWindow?.ApplyTabVisibility();
         }
 
         private void ToggleTaskbarModule_Click(object sender, RoutedEventArgs e)
         {
-            // Toggles Taskbar Preview in ribbon
+            if (_settings == null) return;
+            _settings.ShowTaskbarTab = ToggleTaskbarModule.IsChecked == true;
+            _mainWindow?.ApplyTabVisibility();
         }
 
         private void TogglePomodoroModule_Click(object sender, RoutedEventArgs e)
@@ -543,6 +743,7 @@ namespace DynamicIsland
             {
                 _settings.EnableFloatingDock = ToggleFloatingDock.IsChecked == true;
                 DockManager.Instance.SetDockEnabled(_settings.EnableFloatingDock);
+                if (_settings.EnableFloatingDock) DockManager.Instance.RevealDock(); // show it once so the user sees it is on
             }
         }
 
@@ -579,6 +780,46 @@ namespace DynamicIsland
             if (_settings != null) _settings.ShowVolumeHUD = ToggleVolumeHUD.IsChecked == true;
         }
 
+        private void ToggleNotifAll_Click(object sender, RoutedEventArgs e)
+        {
+            if (_settings != null) _settings.EnableNotifications = ToggleNotifAll.IsChecked == true;
+        }
+
+        private void ToggleNotifWhatsApp_Click(object sender, RoutedEventArgs e)
+        {
+            if (_settings != null) _settings.EnableWhatsAppNotif = ToggleNotifWhatsApp.IsChecked == true;
+        }
+
+        private void ToggleNotifDiscord_Click(object sender, RoutedEventArgs e)
+        {
+            if (_settings != null) _settings.EnableDiscordNotif = ToggleNotifDiscord.IsChecked == true;
+        }
+
+        private void ToggleNotifSteam_Click(object sender, RoutedEventArgs e)
+        {
+            if (_settings != null) _settings.EnableSteamNotif = ToggleNotifSteam.IsChecked == true;
+        }
+
+        private void BtnNotifPermission_Click(object sender, RoutedEventArgs e)
+        {
+            NotificationManager.Instance?.OpenNotificationSettings();
+        }
+
+        private void BtnTestNotifWhatsApp_Click(object sender, RoutedEventArgs e)
+        {
+            NotificationManager.Instance?.SimulateWhatsAppNotification();
+        }
+
+        private void BtnTestNotifDiscord_Click(object sender, RoutedEventArgs e)
+        {
+            NotificationManager.Instance?.SimulateDiscordNotification();
+        }
+
+        private void BtnTestNotifSteam_Click(object sender, RoutedEventArgs e)
+        {
+            NotificationManager.Instance?.SimulateSteamNotification();
+        }
+
         // ==========================================
         // 4. CAT BUDDY & CHARACTERS
         // ==========================================
@@ -594,7 +835,7 @@ namespace DynamicIsland
 
         private void HighlightActiveCharacter(string? charName)
         {
-            var activeBorder = new SolidColorBrush(Color.FromRgb(59, 130, 246));
+            var activeBorder = new SolidColorBrush(Color.FromRgb(0x0A, 0x84, 0xFF));
             var clearBorder = Brushes.Transparent;
 
             if (BtnCharNailong != null) BtnCharNailong.BorderBrush = (charName == "Nailong" || string.IsNullOrEmpty(charName)) ? activeBorder : clearBorder;
@@ -625,6 +866,7 @@ namespace DynamicIsland
 
         private void SliderHoverDelay_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
+            if (_isInitializing) return;
             if (TxtHoverDelay != null)
             {
                 TxtHoverDelay.Text = $"{(int)e.NewValue}ms";
@@ -681,6 +923,7 @@ namespace DynamicIsland
 
         private void SliderCompactW_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
+            if (_isInitializing) return;
             if (TxtCompactW != null) TxtCompactW.Text = $"{(int)e.NewValue} px";
             if (_mainWindow != null && _mainWindow.Settings != null)
             {
@@ -691,6 +934,7 @@ namespace DynamicIsland
 
         private void SliderCompactH_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
+            if (_isInitializing) return;
             if (TxtCompactH != null) TxtCompactH.Text = $"{(int)e.NewValue} px";
             if (_mainWindow != null && _mainWindow.Settings != null)
             {
@@ -701,6 +945,7 @@ namespace DynamicIsland
 
         private void SliderExpandedW_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
+            if (_isInitializing) return;
             if (TxtExpandedW != null) TxtExpandedW.Text = $"{(int)e.NewValue} px";
             if (_mainWindow != null && _mainWindow.Settings != null)
             {
@@ -711,6 +956,7 @@ namespace DynamicIsland
 
         private void SliderExpandedH_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
+            if (_isInitializing) return;
             if (TxtExpandedH != null) TxtExpandedH.Text = $"{(int)e.NewValue} px";
             if (_mainWindow != null && _mainWindow.Settings != null)
             {
@@ -757,16 +1003,12 @@ namespace DynamicIsland
             if (_settings != null) _settings.AutoSwitchMusic = ToggleAutoMusic.IsChecked == true;
         }
 
-        private void ToggleWaveEqualizer_Click(object sender, RoutedEventArgs e)
-        {
-            // Toggles wave equalizer animation
-        }
-
         // ==========================================
         // 9. WEATHER CONTROLS
         // ==========================================
         private void CmbWeatherCity_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (_isInitializing) return;
             if (_settings != null && CmbWeatherCity?.SelectedItem is ComboBoxItem item)
             {
                 _settings.WeatherCity = item.Content?.ToString() ?? "Jakarta";
@@ -775,6 +1017,7 @@ namespace DynamicIsland
 
         private void CmbWeatherUnit_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (_isInitializing) return;
             if (_settings != null && CmbWeatherUnit?.SelectedItem is ComboBoxItem item)
             {
                 var content = item.Content?.ToString() ?? "Celsius";
@@ -787,6 +1030,7 @@ namespace DynamicIsland
         // ==========================================
         private void CmbPrayerCity_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (_isInitializing) return;
             if (_settings != null && CmbPrayerCity?.SelectedItem is ComboBoxItem item)
             {
                 _settings.PrayerCity = item.Content?.ToString() ?? "Jakarta (WIB)";
@@ -808,6 +1052,7 @@ namespace DynamicIsland
         // ==========================================
         private void SliderPomodoroWork_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
+            if (_isInitializing) return;
             if (TxtPomodoroWork != null)
             {
                 TxtPomodoroWork.Text = $"{(int)e.NewValue} Menit";
@@ -820,6 +1065,7 @@ namespace DynamicIsland
 
         private void SliderPomodoroBreak_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
+            if (_isInitializing) return;
             if (TxtPomodoroBreak != null)
             {
                 TxtPomodoroBreak.Text = $"{(int)e.NewValue} Menit";
@@ -835,6 +1081,7 @@ namespace DynamicIsland
         // ==========================================
         private void SliderWaterReminder_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
+            if (_isInitializing) return;
             if (TxtWaterReminder != null)
             {
                 TxtWaterReminder.Text = $"{(int)e.NewValue} Menit";
@@ -865,6 +1112,7 @@ namespace DynamicIsland
 
         private void SliderScreenLimit_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
+            if (_isInitializing) return;
             if (TxtScreenLimit != null)
             {
                 TxtScreenLimit.Text = $"{(int)e.NewValue} Jam";
@@ -880,6 +1128,7 @@ namespace DynamicIsland
         // ==========================================
         private void CmbWorkHours_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (_isInitializing) return;
             if (_settings != null && CmbWorkStart?.SelectedItem is ComboBoxItem startItem)
             {
                 var text = startItem.Content?.ToString() ?? "09:00";
@@ -891,6 +1140,64 @@ namespace DynamicIsland
                 if (int.TryParse(text.Split(':')[0], out int endH)) _settings.WorkdayEndHour = endH;
             }
         }
+
+        // ==========================================
+        // 8. CALENDAR CONTROLS
+        // ==========================================
+        private void CmbCalendarFirstDay_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_isInitializing || _settings == null || CmbCalendarFirstDay == null) return;
+            _settings.CalendarWeekStartsMonday = CmbCalendarFirstDay.SelectedIndex != 1;
+            _mainWindow?.Metrics?.RefreshAgenda();
+        }
+
+        private void ToggleCalendarSync_Click(object sender, RoutedEventArgs e)
+        {
+            if (_settings == null) return;
+            _settings.CalendarMarkToday = ToggleCalendarSync.IsChecked == true;
+            _mainWindow?.Metrics?.RefreshAgenda();
+        }
+
+        // ==========================================
+        // 15. BLUETOOTH & WI-FI CONTROLS
+        // ==========================================
+        private void ToggleAccBattery_Click(object sender, RoutedEventArgs e)
+        {
+            if (_settings != null) _settings.ShowAccessoryBattery = ToggleAccBattery.IsChecked == true;
+        }
+
+        private void ToggleWifiSSID_Click(object sender, RoutedEventArgs e)
+        {
+            if (_settings != null) _settings.ShowWifiSsid = ToggleWifiSSID.IsChecked == true;
+        }
+
+        // ==========================================
+        // HELPERS
+        // ==========================================
+        /// <summary>Selects the first item whose text matches; falls back to the first item.</summary>
+        private static void SelectComboItem(ComboBox? combo, Func<string, bool> match)
+        {
+            if (combo == null || combo.Items.Count == 0) return;
+            foreach (var o in combo.Items)
+                if (o is ComboBoxItem it && match(it.Content?.ToString() ?? "")) { combo.SelectedItem = it; return; }
+            combo.SelectedIndex = 0;
+        }
+
+        private static void FillHourCombo(ComboBox? combo, int from, int to, int selected)
+        {
+            if (combo == null) return;
+            combo.Items.Clear();
+            selected = Math.Clamp(selected, from, to);
+            for (int h = from; h <= to; h++)
+            {
+                var it = new ComboBoxItem { Content = $"{h:00}:00" };
+                combo.Items.Add(it);
+                if (h == selected) combo.SelectedItem = it;
+            }
+        }
+
+        private static string TitleCase(string s) =>
+            System.Globalization.CultureInfo.CurrentCulture.TextInfo.ToTitleCase((s ?? "").ToLower());
 
         // ==========================================
         // 17. SUPPORT CREATOR (SAWERIA QRIS)
@@ -967,8 +1274,8 @@ namespace DynamicIsland
             UpdateActiveHeader();
 
             // Sidebar
-            if (TxtSectionDynamic != null) TxtSectionDynamic.Text = loc.Get("SectionDynamic", "DYNAMIC");
-            if (TxtSectionModules != null) TxtSectionModules.Text = loc.Get("SectionModules", "MODUL & FITUR");
+            if (TxtSectionDynamic != null) TxtSectionDynamic.Text = TitleCase(loc.Get("SectionDynamic", "DYNAMIC"));
+            if (TxtSectionModules != null) TxtSectionModules.Text = TitleCase(loc.Get("SectionModules", "MODUL & FITUR"));
 
             if (TxtNavWelcome != null) TxtNavWelcome.Text = loc.Get("NavWelcome");
             if (TxtNavGeneral != null) TxtNavGeneral.Text = loc.Get("NavGeneral");
@@ -987,11 +1294,10 @@ namespace DynamicIsland
             if (TxtNavDayProgress != null) TxtNavDayProgress.Text = loc.Get("NavDayProgress");
             if (TxtNavBluetoothWifi != null) TxtNavBluetoothWifi.Text = loc.Get("NavBluetoothWifi");
             if (TxtNavSupportCreator != null) TxtNavSupportCreator.Text = loc.Get("NavSupportCreator");
-            if (BtnQuickSupport != null) BtnQuickSupport.Content = "\uD83D\uDC96 " + loc.Get("NavSupportCreator");
+            if (BtnQuickSupport != null) BtnQuickSupport.Content = loc.Get("NavSupportCreator");
             if (BtnExitApp != null) BtnExitApp.Content = loc.Get("BtnExitApp");
 
             // Page 1: General
-            if (TxtBrandingSub != null) TxtBrandingSub.Text = loc.Get("BrandingSub");
             if (TxtLaunchAtLoginTitle != null) TxtLaunchAtLoginTitle.Text = loc.Get("LaunchAtLoginTitle");
             if (TxtShowDynamicOn != null) TxtShowDynamicOn.Text = loc.Get("ShowDynamicOn");
             if (TxtGeneralLanguageTitle != null) TxtGeneralLanguageTitle.Text = loc.Get("LanguageTitle");
@@ -1074,8 +1380,6 @@ namespace DynamicIsland
 
             // Page 8: Calendar
             if (TxtCalendarHeaderTitle != null) TxtCalendarHeaderTitle.Text = loc.Get("CalendarHeaderTitle");
-            if (TxtCalendarSyncTitle != null) TxtCalendarSyncTitle.Text = loc.Get("CalendarSyncTitle");
-            if (TxtCalendarSyncDesc != null) TxtCalendarSyncDesc.Text = loc.Get("CalendarSyncDesc");
 
             // Page 9: Weather
             if (TxtWeatherHeaderTitle != null) TxtWeatherHeaderTitle.Text = loc.Get("WeatherHeaderTitle");
@@ -1129,17 +1433,15 @@ namespace DynamicIsland
             if (TxtShortcut4 != null) TxtShortcut4.Text = "\u2022 " + loc.Get("Shortcut4");
 
             // Page 17: Support Creator
-            if (TxtSupportHeaderTitle != null) TxtSupportHeaderTitle.Text = loc.Get("SupportTitle");
-            if (TxtSupportHeaderDesc != null) TxtSupportHeaderDesc.Text = loc.Get("SupportDesc");
             if (TxtSaweriaTitle != null) TxtSaweriaTitle.Text = loc.Get("SaweriaTitle");
             if (TxtSaweriaDesc != null) TxtSaweriaDesc.Text = loc.Get("SaweriaDesc");
-            if (BtnOpenSaweriaUrl != null) BtnOpenSaweriaUrl.Content = "\uD83C\uDF10 " + loc.Get("BtnOpenSaweria");
-            if (BtnCopySaweriaUrl != null) BtnCopySaweriaUrl.Content = "\uD83D\uDCCB " + loc.Get("BtnCopySaweria");
+            if (BtnOpenSaweriaUrl != null) BtnOpenSaweriaUrl.Content = loc.Get("BtnOpenSaweria");
+            if (BtnCopySaweriaUrl != null) BtnCopySaweriaUrl.Content = loc.Get("BtnCopySaweria");
 
             if (TxtPaypalTitle != null) TxtPaypalTitle.Text = loc.Get("PaypalTitle");
             if (TxtPaypalDesc != null) TxtPaypalDesc.Text = loc.Get("PaypalDesc");
-            if (BtnOpenPaypalUrl != null) BtnOpenPaypalUrl.Content = "\uD83C\uDF10 " + loc.Get("BtnOpenPaypal");
-            if (BtnCopyPaypalUrl != null) BtnCopyPaypalUrl.Content = "\uD83D\uDCCB " + loc.Get("BtnCopyPaypal");
+            if (BtnOpenPaypalUrl != null) BtnOpenPaypalUrl.Content = loc.Get("BtnOpenPaypal");
+            if (BtnCopyPaypalUrl != null) BtnCopyPaypalUrl.Content = loc.Get("BtnCopyPaypal");
             if (TxtSupportFooter != null) TxtSupportFooter.Text = loc.Get("SupportFooter");
         }
 
@@ -1215,15 +1517,16 @@ namespace DynamicIsland
                 int index = i;
                 var item = config.Items[i];
 
+                // macOS grouped-list row: hairline separator between rows instead of separate cards
                 var card = new Border
                 {
-                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#15161C")),
-                    BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#23252E")),
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(10),
-                    Padding = new Thickness(14, 10, 14, 10),
-                    Margin = new Thickness(0, 3, 0, 3)
+                    Background = Brushes.Transparent,
+                    BorderBrush = (Brush)FindResource("SepBrush"),
+                    BorderThickness = new Thickness(0, 0, 0, i < config.Items.Count - 1 ? 1 : 0),
+                    Padding = new Thickness(0, 8, 0, 8)
                 };
+                var macButton = (Style)FindResource("RoundedBtnStyle");
+                var glyphFont = (FontFamily)FindResource("Glyphs");
 
                 var grid = new Grid();
                 grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(42) });
@@ -1233,9 +1536,9 @@ namespace DynamicIsland
                 // Column 0: Icon squircle
                 var iconBorder = new Border
                 {
-                    Width = 34, Height = 34,
-                    CornerRadius = new CornerRadius(9),
-                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#20232B")),
+                    Width = 32, Height = 32,
+                    CornerRadius = new CornerRadius(8),
+                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3A3A3C")),
                     HorizontalAlignment = HorizontalAlignment.Left
                 };
 
@@ -1334,7 +1637,7 @@ namespace DynamicIsland
                 spInfo.Children.Add(new TextBlock
                 {
                     Text = string.IsNullOrEmpty(item.Path) ? "(Target internal bawaan)" : item.Path,
-                    Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#8E95A5")),
+                    Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#98989D")),
                     FontSize = 10.5,
                     TextTrimming = TextTrimming.CharacterEllipsis,
                     Margin = new Thickness(0, 2, 0, 0)
@@ -1348,13 +1651,12 @@ namespace DynamicIsland
                 // Up Button
                 var btnUp = new Button
                 {
-                    Content = "\u25B2",
-                    Width = 28, Height = 28,
+                    Content = "\uE70E",
+                    Style = macButton,
+                    FontFamily = glyphFont,
+                    FontSize = 10,
+                    Width = 28, Height = 24, Padding = new Thickness(0),
                     Margin = new Thickness(0, 0, 4, 0),
-                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#232630")),
-                    Foreground = Brushes.White,
-                    BorderThickness = new Thickness(0),
-                    Cursor = Cursors.Hand,
                     IsEnabled = (index > 0),
                     ToolTip = "Pindah ke kiri / awal dock"
                 };
@@ -1377,13 +1679,12 @@ namespace DynamicIsland
                 // Down Button
                 var btnDown = new Button
                 {
-                    Content = "\u25BC",
-                    Width = 28, Height = 28,
+                    Content = "\uE70D",
+                    Style = macButton,
+                    FontFamily = glyphFont,
+                    FontSize = 10,
+                    Width = 28, Height = 24, Padding = new Thickness(0),
                     Margin = new Thickness(0, 0, 8, 0),
-                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#232630")),
-                    Foreground = Brushes.White,
-                    BorderThickness = new Thickness(0),
-                    Cursor = Cursors.Hand,
                     IsEnabled = (index < config.Items.Count - 1),
                     ToolTip = "Pindah ke kanan / akhir dock"
                 };
@@ -1406,16 +1707,12 @@ namespace DynamicIsland
                 // Delete Button
                 var btnDelete = new Button
                 {
-                    Content = "\u2715 Hapus",
-                    Height = 28,
-                    Padding = new Thickness(10, 0, 10, 0),
-                    Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#331818")),
-                    Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F87171")),
-                    BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#5C2020")),
-                    BorderThickness = new Thickness(1),
-                    Cursor = Cursors.Hand,
-                    FontSize = 11,
-                    FontWeight = FontWeights.SemiBold
+                    Content = "Hapus",
+                    Style = macButton,
+                    Height = 24,
+                    Padding = new Thickness(12, 0, 12, 0),
+                    Foreground = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF6961")),
+                    FontSize = 12.5
                 };
                 int delIdx = index;
                 btnDelete.Click += (s, e) =>

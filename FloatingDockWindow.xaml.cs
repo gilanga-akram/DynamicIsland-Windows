@@ -50,10 +50,21 @@ namespace DynamicIsland
             RebuildPinnedApps();
         }
 
+        public bool IsContextMenuOpen
+        {
+            get
+            {
+                if (ContextMenu?.IsOpen == true) return true;
+                foreach (var child in PanelPinnedApps.Children)
+                    if (child is Button b && b.ContextMenu?.IsOpen == true) return true;
+                return _quickControl?.IsVisible == true;
+            }
+        }
+
         public void UpdatePosition()
         {
             double sw = SystemParameters.PrimaryScreenWidth;
-            Height = 86; if (Width < 640) Width = 920;
+            Height = 104; if (Width < 640) Width = 920;
             Left = (sw - Width) / 2.0;
             Top = SystemParameters.PrimaryScreenHeight - Height - 6;
         }
@@ -74,7 +85,7 @@ namespace DynamicIsland
             // Recalculate dock width based on item count
             int itemCount = _dockConfig.Items.Count;
             // Each item ~43px + fixed elements ~380px
-            double sw = SystemParameters.PrimaryScreenWidth; Width = Math.Min(sw - 30, Math.Max(640, 470 + itemCount * 46));
+            double sw = SystemParameters.PrimaryScreenWidth; Width = Math.Min(sw - 30, Math.Max(640, 480 + itemCount * 54));
             UpdatePosition();
 
             foreach (var item in _dockConfig.Items)
@@ -96,15 +107,15 @@ namespace DynamicIsland
             // Icon tile
             var border = new Border
             {
-                Width = 38, Height = 38,
-                CornerRadius = new CornerRadius(11),
+                Width = 46, Height = 46,
+                CornerRadius = new CornerRadius(12),
                 Background = string.IsNullOrEmpty(item.IconBg)
                     ? Brushes.Transparent
                     : new SolidColorBrush((Color)ColorConverter.ConvertFromString(item.IconBg)!),
             };
             border.Effect = new System.Windows.Media.Effects.DropShadowEffect
             {
-                BlurRadius = 4, ShadowDepth = 1, Direction = 270,
+                BlurRadius = 8, ShadowDepth = 2, Direction = 270,
                 Color = Colors.Black, Opacity = 0.25
             };
 
@@ -138,7 +149,7 @@ namespace DynamicIsland
                     var img = new Image
                     {
                         Source = new BitmapImage(new Uri(item.IconAsset, UriKind.Relative)),
-                        Width = 36, Height = 36, Stretch = Stretch.Uniform
+                        Width = 46, Height = 46, Stretch = Stretch.Uniform
                     };
                     RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
                     iconEl = img;
@@ -153,8 +164,8 @@ namespace DynamicIsland
                 var path = new System.Windows.Shapes.Path
                 {
                     Stretch = Stretch.Uniform,
-                    Width = 15,
-                    Height = 15,
+                    Width = 20,
+                    Height = 20,
                     Fill = Brushes.White,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
@@ -169,16 +180,16 @@ namespace DynamicIsland
                 var grid = new Grid();
                 var topBar = new Border
                 {
-                    Height = 11,
+                    Height = 14,
                     VerticalAlignment = VerticalAlignment.Top,
                     Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FF3B30")),
-                    CornerRadius = new CornerRadius(11, 11, 0, 0)
+                    CornerRadius = new CornerRadius(12, 12, 0, 0)
                 };
                 var tbMonth = new TextBlock
                 {
                     Text = now.ToString("MMM", new System.Globalization.CultureInfo("id-ID")).ToUpper(),
                     Foreground = Brushes.White,
-                    FontSize = 7.5,
+                    FontSize = 8.5,
                     FontWeight = FontWeights.Bold,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center
@@ -190,26 +201,26 @@ namespace DynamicIsland
                 {
                     Text = now.Day.ToString(),
                     Foreground = new SolidColorBrush(Color.FromRgb(17, 17, 17)),
-                    FontSize = 14,
+                    FontSize = 18,
                     FontWeight = FontWeights.Bold,
                     FontFamily = new FontFamily("Segoe UI Variable Display, Consolas, sans-serif"),
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(0, 8, 0, 0)
+                    Margin = new Thickness(0, 11, 0, 0)
                 };
                 grid.Children.Add(tbDay);
                 iconEl = grid;
             }
             else if (iconEl == null && (item.Name.Equals("Pengaturan", StringComparison.OrdinalIgnoreCase) || item.Name.Contains("Settings", StringComparison.OrdinalIgnoreCase)))
             {
-                border.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4A5263"));
-                border.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#606A80"));
+                border.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#8E8E93"));
+                border.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#33FFFFFF"));
                 border.BorderThickness = new Thickness(1);
                 var path = new System.Windows.Shapes.Path
                 {
                     Stretch = Stretch.Uniform,
-                    Width = 16,
-                    Height = 16,
+                    Width = 21,
+                    Height = 21,
                     Fill = Brushes.White,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
@@ -235,7 +246,7 @@ namespace DynamicIsland
                     {
                         var bmp = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
                             shinfo.hIcon, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
-                        iconEl = new Image { Source = bmp, Width = 34, Height = 34, Stretch = Stretch.Uniform };
+                        iconEl = new Image { Source = bmp, Width = 44, Height = 44, Stretch = Stretch.Uniform };
                         RenderOptions.SetBitmapScalingMode(iconEl, BitmapScalingMode.HighQuality);
                         NativeMethods.DestroyIcon(shinfo.hIcon);
                     }
@@ -262,7 +273,7 @@ namespace DynamicIsland
                                 {
                                     var bmp = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
                                         shinfo.hIcon, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
-                                    iconEl = new Image { Source = bmp, Width = 34, Height = 34, Stretch = Stretch.Uniform };
+                                    iconEl = new Image { Source = bmp, Width = 44, Height = 44, Stretch = Stretch.Uniform };
                                     RenderOptions.SetBitmapScalingMode(iconEl, BitmapScalingMode.HighQuality);
                                     NativeMethods.DestroyIcon(shinfo.hIcon);
                                 }
@@ -500,7 +511,7 @@ namespace DynamicIsland
             if (_quickControl.IsVisible)
                 _quickControl.Hide();
             else
-                _quickControl.ShowAt(Left + Width - 10, Top);
+                _quickControl.ShowAt(Left + Width - 10, Top + 34); // 34 = transparent magnification band above the bar
         }
 
         private void AppSettings_Click(object sender, RoutedEventArgs e)
@@ -604,6 +615,8 @@ namespace DynamicIsland
                 }
                 else
                 {
+                    // Only come back from behind a game if the dock was summoned; otherwise it stays hidden
+                    if (!DockManager.Instance.DockWanted) return;
                     this.Visibility = Visibility.Visible;
                     this.IsHitTestVisible = true;
                     this.Topmost = true;

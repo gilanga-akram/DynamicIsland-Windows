@@ -1,4 +1,4 @@
-// Language: C#
+﻿// Language: C#
 // Filename: ClipboardManager.cs
 // Runs on: Windows 10 / Windows 11 (.NET 9.0-windows10.0.19041.0)
 // Targets: Dynamic Island Atoll Clipboard History Manager
@@ -155,6 +155,7 @@ namespace DynamicIsland
 
         private void OnClipboardChanged()
         {
+            if (SettingsManager.Instance?.EnableClipboardManager == false) return; // history recording turned off in Settings
             if (_isSelfCopying) return;
 
             try

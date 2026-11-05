@@ -1,4 +1,4 @@
-// Language: C#
+﻿// Language: C#
 // Filename: AudioManager.cs
 // Runs on: Windows 10 / Windows 11 (.NET 9.0-windows10.0.19041.0)
 // Targets: Realtime Per-App Audio Mixer & Microphone Activity Sensor (WASAPI & ConsentStore)
@@ -184,6 +184,80 @@ namespace DynamicIsland
                 RefreshAudioSessions();
             };
             _pollTimer.Start();
+
+            // Watch the system master volume so keyboard / Windows changes show up live
+            _masterPoll = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+            _masterPoll.Tick += (s, e) => PollMasterState();
+            _masterPoll.Start();
+        }
+
+        private readonly DispatcherTimer _masterPoll;
+        private bool _masterMuted;
+        private bool _masterStateKnown;
+
+        /// <summary>System output mute state.</summary>
+        public bool IsMasterMuted => _masterMuted;
+
+        /// <summary>Raised when the master volume or mute changes outside this app (keys, Windows flyout).</summary>
+        public event Action<int, bool>? MasterChangedExternally;
+
+        private IAudioEndpointVolume? GetEndpointVolume(EDataFlow flow)
+        {
+            var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+            enumerator.GetDefaultAudioEndpoint(flow, ERole.eMultimedia, out var device);
+            if (device == null) return null;
+            var iid = typeof(IAudioEndpointVolume).GUID;
+            device.Activate(ref iid, CLSCTX.ALL, IntPtr.Zero, out var epvObj);
+            return epvObj as IAudioEndpointVolume;
+        }
+
+        private void PollMasterState()
+        {
+            try
+            {
+                var epv = GetEndpointVolume(EDataFlow.eRender);
+                if (epv == null) return;
+                epv.GetMasterVolumeLevelScalar(out float level);
+                epv.GetMute(out bool muted);
+                int vol = (int)Math.Round(level * 100);
+                bool changed = vol != _masterOutputVolume || muted != _masterMuted;
+                _masterOutputVolume = vol;
+                _masterMuted = muted;
+                if (changed)
+                {
+                    OnPropertyChanged(nameof(MasterOutputVolume));
+                    OnPropertyChanged(nameof(IsMasterMuted));
+                    if (_masterStateKnown) MasterChangedExternally?.Invoke(vol, muted);
+                }
+                _masterStateKnown = true;
+            }
+            catch { }
+        }
+
+        /// <summary>Toggles the default microphone mute. Returns the new muted state, or null on failure.</summary>
+        public bool? ToggleMicMute()
+        {
+            try
+            {
+                var epv = GetEndpointVolume(EDataFlow.eCapture);
+                if (epv == null) return null;
+                epv.GetMute(out bool muted);
+                epv.SetMute(!muted, Guid.Empty);
+                return !muted;
+            }
+            catch { return null; }
+        }
+
+        public bool? IsMicMuted()
+        {
+            try
+            {
+                var epv = GetEndpointVolume(EDataFlow.eCapture);
+                if (epv == null) return null;
+                epv.GetMute(out bool muted);
+                return muted;
+            }
+            catch { return null; }
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -319,6 +393,7 @@ namespace DynamicIsland
                     {
                         epv.GetMute(out bool isMuted);
                         epv.SetMute(!isMuted, Guid.Empty);
+                        _masterMuted = !isMuted;
                         return !isMuted;
                     }
                 }

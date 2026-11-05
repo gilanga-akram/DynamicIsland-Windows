@@ -1,4 +1,4 @@
-// Language: C#
+﻿// Language: C#
 // Filename: NotificationManager.cs
 // Runs on: Windows 10 / Windows 11 (.NET 9.0-windows10.0.19041.0)
 // Targets: Multi-layered Realtime Desktop Notification Interceptor (Discord, Steam, Windows Toast)
@@ -23,7 +23,49 @@ namespace DynamicIsland
     {
         Discord,
         Steam,
+        WhatsApp,
         General
+    }
+
+    /// <summary>Steam's own icon, read from the installed steam.exe (no logo file ships with the app).</summary>
+    public static class SteamLogo
+    {
+        private static System.Windows.Media.Imaging.BitmapSource? _cached;
+        private static bool _tried;
+
+        public static System.Windows.Media.Imaging.BitmapSource? Get()
+        {
+            if (_tried) return _cached;
+            _tried = true;
+            try
+            {
+                string? path = null;
+                var running = Process.GetProcessesByName("steam");
+                try { if (running.Length > 0) path = running[0].MainModule?.FileName; } catch { }
+
+                if (string.IsNullOrEmpty(path))
+                {
+                    string? reg = Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Valve\Steam", "SteamExe", null) as string;
+                    if (!string.IsNullOrEmpty(reg)) path = reg.Replace('/', '\\');
+                }
+                if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                    path = @"C:\Program Files (x86)\Steam\steam.exe";
+                if (!File.Exists(path)) return null;
+
+                var shinfo = new NativeMethods.SHFILEINFO();
+                NativeMethods.SHGetFileInfo(path, 0, ref shinfo, (uint)Marshal.SizeOf(shinfo),
+                    NativeMethods.SHGFI_ICON | NativeMethods.SHGFI_LARGEICON);
+                if (shinfo.hIcon == IntPtr.Zero) return null;
+
+                var bmp = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
+                    shinfo.hIcon, Int32Rect.Empty, System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
+                bmp.Freeze();
+                NativeMethods.DestroyIcon(shinfo.hIcon);
+                _cached = bmp;
+            }
+            catch { }
+            return _cached;
+        }
     }
 
     public class NotificationItem
@@ -37,6 +79,8 @@ namespace DynamicIsland
         public string AccentColor { get; set; } = "#0A84FF";
         public string TargetProcess { get; set; } = "";
         public string Subtitle { get; set; } = "";
+        /// <summary>True when the text came straight from a Windows toast (most reliable source).</summary>
+        public bool FromSystemToast { get; set; }
     }
 
     public class NotificationManager
@@ -153,6 +197,7 @@ namespace DynamicIsland
                 if (string.IsNullOrWhiteSpace(title) && string.IsNullOrWhiteSpace(message)) return;
 
                 var item = CategorizeNotification(appName, title, message);
+                item.FromSystemToast = true;
                 await Application.Current.Dispatcher.InvokeAsync(() =>
                 {
                     DispatchNotification(item);
@@ -201,6 +246,10 @@ namespace DynamicIsland
                 {
                     HandleDiscordElement(element);
                 }
+                else if (procName.Contains("whatsapp"))
+                {
+                    HandleWhatsAppElement(element);
+                }
                 else if (procName.Contains("steam"))
                 {
                     HandleSteamElement(element);
@@ -241,6 +290,31 @@ namespace DynamicIsland
                     if (string.IsNullOrWhiteSpace(body)) body = "Pesan baru diterima";
 
                     TriggerNotification(NotificationAppType.Discord, "Discord", sender, body, "#5865F2", "Discord", "Pesan Masuk");
+                }
+            }
+            catch { }
+        }
+
+        private void HandleWhatsAppElement(AutomationElement element)
+        {
+            try
+            {
+                var rect = element.Current.BoundingRectangle;
+                // Only small floating pop-ups; the main chat window is much bigger
+                if (rect.Width > 40 && rect.Width < 500 && rect.Height > 30 && rect.Height < 350)
+                {
+                    string sender = "WhatsApp";
+                    string body = element.Current.Name ?? "";
+
+                    var texts = element.FindAll(TreeScope.Descendants, new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text));
+                    if (texts != null && texts.Count > 0)
+                    {
+                        if (texts.Count >= 2) { sender = texts[0].Current.Name; body = texts[1].Current.Name; }
+                        else body = texts[0].Current.Name;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(body)) body = "Pesan baru diterima";
+                    TriggerNotification(NotificationAppType.WhatsApp, "WhatsApp", sender, body, "#25D366", "WhatsApp", "Pesan Masuk");
                 }
             }
             catch { }
@@ -295,6 +369,10 @@ namespace DynamicIsland
                     {
                         TriggerNotification(NotificationAppType.Discord, "Discord", t0, t1, "#5865F2", "Discord", "Pesan Masuk");
                     }
+                    else if (combined.Contains("whatsapp"))
+                    {
+                        TriggerNotification(NotificationAppType.WhatsApp, "WhatsApp", t0, t1, "#25D366", "WhatsApp", "Pesan Masuk");
+                    }
                     else if (combined.Contains("steam"))
                     {
                         TriggerNotification(NotificationAppType.Steam, "Steam", t0, t1, "#1A9FFF", "steam", "Notifikasi Game");
@@ -335,6 +413,9 @@ namespace DynamicIsland
                 {
                     CheckDiscordTitle();
                 }
+
+                // A2. WhatsApp desktop / WhatsApp Web: unread counter in the window title, e.g. "(2) WhatsApp"
+                CheckWhatsAppTitle();
 
                 // B. Check Steam Process Windows & Popup Handles
                 var steamProcs = Process.GetProcessesByName("steam");
@@ -394,6 +475,40 @@ namespace DynamicIsland
                     catch { }
                     return true;
                 }, IntPtr.Zero);
+            }
+            catch { }
+        }
+
+        private int _lastWhatsAppUnread = 0;
+
+        private void CheckWhatsAppTitle()
+        {
+            try
+            {
+                int best = -1;
+                string bestTitle = "";
+                EnumWindows((hWnd, lParam) =>
+                {
+                    if (!IsWindowVisible(hWnd)) return true;
+                    var sb = new StringBuilder(256);
+                    GetWindowText(hWnd, sb, 256);
+                    string title = sb.ToString();
+                    if (!title.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase)) return true;
+
+                    var m = Regex.Match(title, @"^\((\d+)\)");
+                    int count = m.Success && int.TryParse(m.Groups[1].Value, out int c) ? c : 0;
+                    if (count > best) { best = count; bestTitle = title; }
+                    return true;
+                }, IntPtr.Zero);
+
+                if (best < 0) { _lastWhatsAppUnread = 0; return; } // no WhatsApp window open
+
+                if (best > _lastWhatsAppUnread)
+                {
+                    string msg = best == 1 ? "1 pesan baru masuk" : $"{best} pesan baru masuk";
+                    TriggerNotification(NotificationAppType.WhatsApp, "WhatsApp", "WhatsApp", msg, "#25D366", "WhatsApp", "Pesan Masuk");
+                }
+                _lastWhatsAppUnread = best;
             }
             catch { }
         }
@@ -459,8 +574,12 @@ namespace DynamicIsland
         // ==============================================
         // DISPATCHER & DEDUPLICATION
         // ==============================================
+        /// <summary>Focus / Do Not Disturb: when true, banners are not shown.</summary>
+        public static bool SuppressAll { get; set; }
+
         public void TriggerNotification(NotificationAppType appType, string appName, string title, string message, string accent, string targetProc, string subtitle)
         {
+            if (SuppressAll) return;
             // Debounce same notification within 3 seconds
             string key = $"{appType}:{title}:{message}";
             if (key == _lastNotificationKey && (DateTime.Now - _lastNotificationTime).TotalSeconds < 3.0)
@@ -491,8 +610,25 @@ namespace DynamicIsland
             });
         }
 
+        private readonly Dictionary<NotificationAppType, DateTime> _lastToastByApp = new();
+
         private void DispatchNotification(NotificationItem item)
         {
+            if (SuppressAll) return;
+
+            // The same message can arrive twice (Windows toast + window/title detection).
+            // The toast has the real sender and text, so a title/window guess right after it is dropped.
+            if (item.FromSystemToast)
+            {
+                _lastToastByApp[item.AppType] = DateTime.Now;
+            }
+            else if (item.AppType != NotificationAppType.General
+                     && _lastToastByApp.TryGetValue(item.AppType, out var t)
+                     && (DateTime.Now - t).TotalSeconds < 5)
+            {
+                return;
+            }
+
             NotificationReceived?.Invoke(item);
         }
 
@@ -515,6 +651,14 @@ namespace DynamicIsland
                 item.AppName = "Discord";
                 item.AccentColor = "#5865F2";
                 item.TargetProcess = "Discord";
+                item.Subtitle = "Pesan Masuk";
+            }
+            else if (lowerApp.Contains("whatsapp") || lowerTitle.Contains("whatsapp"))
+            {
+                item.AppType = NotificationAppType.WhatsApp;
+                item.AppName = "WhatsApp";
+                item.AccentColor = "#25D366";
+                item.TargetProcess = "WhatsApp";
                 item.Subtitle = "Pesan Masuk";
             }
             else if (lowerApp.Contains("steam") || lowerTitle.Contains("steam"))
@@ -541,6 +685,11 @@ namespace DynamicIsland
         public void SimulateDiscordNotification(string sender = "Viper", string message = "hey bro login CS2 let's play premier!")
         {
             TriggerNotification(NotificationAppType.Discord, "Discord", sender, message, "#5865F2", "Discord", "Pesan Masuk");
+        }
+
+        public void SimulateWhatsAppNotification(string sender = "Mama", string message = "Nak, jangan lupa makan ya 😊")
+        {
+            TriggerNotification(NotificationAppType.WhatsApp, "WhatsApp", sender, message, "#25D366", "WhatsApp", "Pesan Masuk");
         }
 
         public void SimulateSteamNotification(string friendName = "Gabe_Newell", string message = "mengundang Anda untuk bermain Counter-Strike 2")

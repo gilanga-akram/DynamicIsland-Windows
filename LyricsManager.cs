@@ -26,6 +26,17 @@ namespace DynamicIsland
         public string TimestampFormatted => $"{Timestamp.Minutes}:{Timestamp.Seconds:D2}";
         public string Text { get; set; } = string.Empty;
 
+        /// <summary>Machine translation of <see cref="Text"/> (kept even while translations are hidden).</summary>
+        internal string TranslatedText { get; set; } = string.Empty;
+
+        private string _translation = string.Empty;
+        /// <summary>Translation shown under the line; empty when hidden or not needed.</summary>
+        public string Translation
+        {
+            get => _translation;
+            set { if (_translation != value) { _translation = value; OnPropertyChanged(); } }
+        }
+
         private bool _isActive;
         public bool IsActive
         {
@@ -52,11 +63,34 @@ namespace DynamicIsland
             => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 
+    /// <summary>
+    /// Karaoke fill: turns a 0–1 line progress into a left-to-right opacity mask with a soft edge,
+    /// so the glowing copy of the active lyric line lights up word by word.
+    /// </summary>
+    public class KaraokeMaskConverter : System.Windows.Data.IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+        {
+            double p = value is double d ? Math.Clamp(d, 0.0, 1.0) : 0.0;
+            const double edge = 0.08;
+            double head = p * (1 + edge); // reaches fully lit at 1.0
+            var brush = new System.Windows.Media.LinearGradientBrush { StartPoint = new System.Windows.Point(0, 0), EndPoint = new System.Windows.Point(1, 0) };
+            brush.GradientStops.Add(new System.Windows.Media.GradientStop(System.Windows.Media.Colors.Black, Math.Max(0, head - edge)));
+            brush.GradientStops.Add(new System.Windows.Media.GradientStop(System.Windows.Media.Colors.Transparent, head));
+            brush.Freeze();
+            return brush;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
+            => throw new NotSupportedException();
+    }
+
     public class LyricsManager : INotifyPropertyChanged
     {
         private static readonly HttpClient _httpClient = new()
         {
-            Timeout = TimeSpan.FromSeconds(5)
+            // LRCLIB regularly needs 10s+ to answer; 5s meant almost every lookup timed out
+            Timeout = TimeSpan.FromSeconds(20)
         };
 
         private readonly Dispatcher _dispatcher;
@@ -202,7 +236,7 @@ namespace DynamicIsland
         public LyricsManager(Dispatcher dispatcher)
         {
             _dispatcher = dispatcher;
-            _cacheDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DynamicIslandPro", "LyricsCache");
+            _cacheDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DynamicIslandPro", "LyricsCache2"); // v2: old cache held mismatched lyrics from unvalidated searches
             try { Directory.CreateDirectory(_cacheDirectory); } catch { }
         }
 
@@ -214,7 +248,8 @@ namespace DynamicIsland
                 return;
             }
 
-            var (cleanTitle, cleanArtist) = CleanTrackMetadata(rawTitle, rawArtist);
+            // MediaManager already split "Artist - Title"; here we only strip noise (never re-split, that swaps titles like "Song - Remix")
+            var (cleanTitle, cleanArtist) = CleanTrackMetadata(rawTitle, rawArtist, structuredSource: true);
             string coreTitle = GetCoreTitle(cleanTitle);
 
             string trackKey = $"{cleanTitle}||{cleanArtist}";
@@ -224,15 +259,23 @@ namespace DynamicIsland
                 return; // Already current track
             }
 
+            bool isNewTrack = trackKey != _currentTrackKey;
             _currentTrackKey = trackKey;
             _fetchCts?.Cancel();
             _fetchCts = new CancellationTokenSource();
             var ct = _fetchCts.Token;
 
+            if (isNewTrack)
+            {
+                // A manual sync offset belongs to the song it was set on
+                _retryCount = 0;
+                _dispatcher.Invoke(ResetOffset);
+            }
+
             // Check in-memory cache first (unless force reload requested)
             if (!forceReload && _memoryCache.TryGetValue(trackKey, out var cached))
             {
-                ApplyLyricsResult(cached.HasLyrics, cached.Lines, cached.PlainText);
+                ApplyLyricsResult(trackKey, cached.HasLyrics, cached.Lines, cached.PlainText);
                 return;
             }
 
@@ -247,160 +290,57 @@ namespace DynamicIsland
                     if (diskLines.Count > 0)
                     {
                         _memoryCache[trackKey] = (true, diskLines, diskLrc);
-                        ApplyLyricsResult(true, diskLines, diskLrc);
+                        ApplyLyricsResult(trackKey, true, diskLines, diskLrc);
                         return;
                     }
                 }
                 catch { }
             }
 
-            IsLoading = true;
-            StatusMessage = "Mencari lirik realtime...";
+            // Don't leave the previous song's lyrics on screen while searching
+            _dispatcher.Invoke(() =>
+            {
+                Lines = new ObservableCollection<LyricLine>();
+                HasLyrics = false;
+                IsInstrumental = false;
+                _activeIndex = -1;
+                CurrentLyricText = "";
+                NextLyricText = "";
+                LyricsSource = "";
+                StatusMessage = "Mencari lirik realtime...";
+                IsLoading = true;
+            });
 
             try
             {
-                // Debounce 150ms to avoid spamming APIs during rapid skipping
-                await Task.Delay(150, ct);
+                // Debounce to avoid spamming APIs during rapid skipping
+                await Task.Delay(250, ct);
 
-                // --- TIER 1: Apple Music Direct (Fastest, highest quality synced lyrics) ---
-                if (isAppleMusic && !string.IsNullOrWhiteSpace(cleanTitle))
+                var found = await FindLyricsAsync(cleanTitle, coreTitle, cleanArtist, durationSec, isAppleMusic, ct);
+                if (ct.IsCancellationRequested || trackKey != _currentTrackKey) return;
+
+                if (found.Candidate != null)
                 {
-                    var appleRes = await TryFetchAppleMusicMultiAsync(cleanTitle, coreTitle, cleanArtist, ct);
-                    if (appleRes != null && appleRes.Value.lines.Count > 0)
-                    {
-                        _memoryCache[trackKey] = (true, appleRes.Value.lines, appleRes.Value.lrc);
-                        LyricsSource = "Apple Music";
-                        SaveToDiskCache(cacheFile, appleRes.Value.lrc);
-                        ApplyLyricsResult(true, appleRes.Value.lines, appleRes.Value.lrc);
-                        return;
-                    }
+                    var c = found.Candidate;
+                    _memoryCache[trackKey] = (true, c.Lines, c.Plain);
+                    LyricsSource = c.Source;
+                    if (c.IsSynced) SaveToDiskCache(cacheFile, c.CacheText);
+                    ApplyLyricsResult(trackKey, true, c.Lines, c.Plain, c.IsInstrumental);
+                    return;
                 }
 
-                LrclibResponse? result = null;
-
-                // --- TIER 2: LRCLIB Exact Get (coreTitle + cleanArtist) ---
-                if (!string.IsNullOrWhiteSpace(coreTitle) && !string.IsNullOrWhiteSpace(cleanArtist))
+                if (found.NetworkFailed)
                 {
-                    result = await FetchFromLrclibGetAsync(coreTitle, cleanArtist, ct);
+                    // Servers too slow / unreachable: not a real "not found", so don't cache it and try again shortly
+                    bool willRetry = _retryCount < MaxAutoRetries;
+                    ApplyLyricsResult(trackKey, false, new List<LyricLine>(), "",
+                        status: willRetry ? "Server lirik lambat, mencoba lagi..." : "Server lirik tidak merespons. Tekan coba lagi.");
+                    if (willRetry) ScheduleRetry(rawTitle, rawArtist, durationSec, isAppleMusic, trackKey, ct);
+                    return;
                 }
 
-                // --- TIER 3: LRCLIB Exact Get with full clean title ---
-                if (result == null && !ct.IsCancellationRequested && !string.IsNullOrWhiteSpace(cleanTitle) && !cleanTitle.Equals(coreTitle, StringComparison.OrdinalIgnoreCase))
-                {
-                    result = await FetchFromLrclibGetAsync(cleanTitle, cleanArtist, ct);
-                }
-
-                // --- TIER 4: Inverted Get (in case title and artist were swapped) ---
-                if (result == null && !ct.IsCancellationRequested && !string.IsNullOrWhiteSpace(cleanArtist) && !cleanArtist.Equals(cleanTitle, StringComparison.OrdinalIgnoreCase))
-                {
-                    result = await FetchFromLrclibGetAsync(cleanArtist, coreTitle, ct);
-                }
-
-                // --- TIER 5: LRCLIB Structured Search (coreTitle + cleanArtist) ---
-                if (result == null && !ct.IsCancellationRequested && !string.IsNullOrWhiteSpace(coreTitle))
-                {
-                    result = await FetchFromLrclibSearchStructuredAsync(coreTitle, cleanArtist, durationSec, ct);
-                }
-
-                // --- TIER 6: LRCLIB Fuzzy Keyword Search "{cleanArtist} {coreTitle}" ---
-                // (Crucial for YouTube where video titles contain extra words or differing capitalization)
-                if (result == null && !ct.IsCancellationRequested)
-                {
-                    string broadQuery = string.IsNullOrWhiteSpace(cleanArtist) ? coreTitle : $"{cleanArtist} {coreTitle}";
-                    result = await FetchFromLrclibSearchAsync(broadQuery, durationSec, ct);
-                }
-
-                // --- TIER 7: Apple Music Proxy Fallback (Enabled for YouTube & Browser tracks!) ---
-                if (result == null && !ct.IsCancellationRequested && !string.IsNullOrWhiteSpace(coreTitle))
-                {
-                    var appleRes = await TryFetchAppleMusicMultiAsync(cleanTitle, coreTitle, cleanArtist, ct);
-                    if (appleRes != null && appleRes.Value.lines.Count > 0)
-                    {
-                        _memoryCache[trackKey] = (true, appleRes.Value.lines, appleRes.Value.lrc);
-                        LyricsSource = "Apple Music";
-                        SaveToDiskCache(cacheFile, appleRes.Value.lrc);
-                        ApplyLyricsResult(true, appleRes.Value.lines, appleRes.Value.lrc);
-                        return;
-                    }
-                }
-
-                // --- TIER 8: LRCLIB Core Title Only Search (Handles YouTube video with unknown channel) ---
-                if (result == null && !ct.IsCancellationRequested && !string.IsNullOrWhiteSpace(coreTitle))
-                {
-                    result = await FetchFromLrclibSearchAsync(coreTitle, durationSec, ct);
-                }
-
-                // --- TIER 9: LRCLIB Full Clean Title Search ---
-                if (result == null && !ct.IsCancellationRequested && !string.IsNullOrWhiteSpace(cleanTitle) && !cleanTitle.Equals(coreTitle, StringComparison.OrdinalIgnoreCase))
-                {
-                    result = await FetchFromLrclibSearchAsync(cleanTitle, durationSec, ct);
-                }
-
-                if (ct.IsCancellationRequested) return;
-
-                if (result != null)
-                {
-                    bool instrumental = result.Instrumental;
-                    string synced = result.SyncedLyrics ?? "";
-                    string plain = result.PlainLyrics ?? "";
-
-                    if (!string.IsNullOrWhiteSpace(synced))
-                    {
-                        var parsedLines = ParseLrcString(synced);
-                        if (parsedLines.Count > 0)
-                        {
-                            _memoryCache[trackKey] = (true, parsedLines, plain);
-                            LyricsSource = "LRCLIB";
-                            SaveToDiskCache(cacheFile, synced);
-                            ApplyLyricsResult(true, parsedLines, plain, instrumental);
-                            return;
-                        }
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(plain))
-                    {
-                        var plainLines = ConvertPlainLyricsToTimed(plain, durationSec);
-                        _memoryCache[trackKey] = (true, plainLines, plain);
-                        SaveToDiskCache(cacheFile, plain);
-                        ApplyLyricsResult(true, plainLines, plain, instrumental);
-                        return;
-                    }
-
-                    if (instrumental)
-                    {
-                        var instLines = new List<LyricLine>
-                        {
-                            new() { Timestamp = TimeSpan.Zero, Text = "\uD83C\uDFB5 Musik Instrumental" }
-                        };
-                        _memoryCache[trackKey] = (true, instLines, "");
-                        ApplyLyricsResult(true, instLines, "", true);
-                        return;
-                    }
-                }
-
-                // --- TIER 10: Fallback to lyrics.ovh for plain lyrics ---
-                if (!ct.IsCancellationRequested && !string.IsNullOrWhiteSpace(coreTitle) && !string.IsNullOrWhiteSpace(cleanArtist))
-                {
-                    string? ovhLyrics = await FetchFromLyricsOvhAsync(coreTitle, cleanArtist, ct);
-                    if (string.IsNullOrWhiteSpace(ovhLyrics))
-                    {
-                        ovhLyrics = await FetchFromLyricsOvhAsync(cleanArtist, coreTitle, ct);
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(ovhLyrics))
-                    {
-                        var plainLines = ConvertPlainLyricsToTimed(ovhLyrics, durationSec);
-                        _memoryCache[trackKey] = (true, plainLines, ovhLyrics);
-                        LyricsSource = "Web";
-                        SaveToDiskCache(cacheFile, ovhLyrics);
-                        ApplyLyricsResult(true, plainLines, ovhLyrics);
-                        return;
-                    }
-                }
-
-                // If completely not found
                 _memoryCache[trackKey] = (false, new List<LyricLine>(), "");
-                ApplyLyricsResult(false, new List<LyricLine>(), "");
+                ApplyLyricsResult(trackKey, false, new List<LyricLine>(), "");
             }
             catch (OperationCanceledException)
             {
@@ -408,9 +348,182 @@ namespace DynamicIsland
             }
             catch
             {
-                _memoryCache[trackKey] = (false, new List<LyricLine>(), "");
-                ApplyLyricsResult(false, new List<LyricLine>(), "");
+                ApplyLyricsResult(trackKey, false, new List<LyricLine>(), "");
             }
+        }
+
+        private const int MaxAutoRetries = 2;
+        private int _retryCount = 0;
+
+        private void ScheduleRetry(string rawTitle, string rawArtist, double durationSec, bool isAppleMusic, string trackKey, CancellationToken ct)
+        {
+            _retryCount++;
+            _ = Task.Delay(TimeSpan.FromSeconds(10), ct).ContinueWith(t =>
+            {
+                if (t.IsCanceled || trackKey != _currentTrackKey) return;
+                _dispatcher.InvokeAsync(() => LoadLyricsAsync(rawTitle, rawArtist, durationSec, forceReload: true, isAppleMusic: isAppleMusic));
+            }, TaskScheduler.Default);
+        }
+
+        private sealed class LyricsCandidate
+        {
+            public List<LyricLine> Lines { get; init; } = new();
+            public string Plain { get; init; } = "";
+            public string CacheText { get; init; } = "";
+            public string Source { get; init; } = "";
+            public bool IsSynced { get; init; }
+            public bool IsInstrumental { get; init; }
+        }
+
+        private sealed class FetchStats
+        {
+            public int LrclibAnswers;
+            public int LrclibFailures;
+        }
+
+        /// <summary>
+        /// Runs the lyric sources in parallel (LRCLIB can take 10s+ per request, so a sequential chain never finishes)
+        /// and returns the first validated synced result, falling back to plain lyrics.
+        /// </summary>
+        private async Task<(LyricsCandidate? Candidate, bool NetworkFailed)> FindLyricsAsync(
+            string title, string coreTitle, string artist, double durationSec, bool isAppleMusic, CancellationToken ct)
+        {
+            var stats = new FetchStats();
+            bool hasArtist = !string.IsNullOrWhiteSpace(artist) && !IsChannelOrGenericArtist(artist);
+
+            // Phase 1: precise lookups (exact LRCLIB get + structured search, Apple Music for Apple sources)
+            var phase1 = new List<Func<CancellationToken, Task<LyricsCandidate?>>>();
+            if (hasArtist)
+            {
+                phase1.Add(c => LrclibGetCandidateAsync(coreTitle, artist, durationSec, stats, c));
+                phase1.Add(c => LrclibSearchCandidateAsync(coreTitle, artist, null, coreTitle, artist, hasArtist, durationSec, stats, c));
+            }
+            // Apple Music lyrics usually answer in ~1s while LRCLIB can take 20s, so race them for every source
+            if (isAppleMusic || hasArtist) phase1.Add(c => AppleCandidateAsync(title, coreTitle, artist, c));
+
+            // Phase 2: fuzzy keyword search (YouTube titles). Started right away so the slow LRCLIB requests overlap,
+            // but its results are only used when phase 1 has no synced lyrics (phase 1 is more precise).
+            var phase2 = new List<Func<CancellationToken, Task<LyricsCandidate?>>>
+            {
+                c => LrclibSearchCandidateAsync(null, null, hasArtist ? $"{artist} {coreTitle}" : coreTitle, coreTitle, artist, hasArtist, durationSec, stats, c)
+            };
+            if (hasArtist) phase2.Add(c => LrclibSearchCandidateAsync(coreTitle, null, null, coreTitle, artist, hasArtist, durationSec, stats, c));
+
+            using var lookupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var phase1Tasks = StartAll(phase1, lookupCts.Token);
+            var phase2Tasks = StartAll(phase2, lookupCts.Token);
+
+            try
+            {
+                var best1 = await FirstSyncedOrBestAsync(phase1Tasks, ct);
+                if (best1 != null && best1.IsSynced) return (best1, false);
+
+                var best2 = await FirstSyncedOrBestAsync(phase2Tasks, ct);
+                if (best2 != null && best2.IsSynced) return (best2, false);
+
+                var plainBest = best1 ?? best2;
+                if (plainBest != null) return (plainBest, false);
+            }
+            finally
+            {
+                lookupCts.Cancel(); // Stop whatever is still running once we have an answer
+            }
+
+            // Phase 3: plain lyrics from lyrics.ovh
+            if (hasArtist && !string.IsNullOrWhiteSpace(coreTitle))
+            {
+                string? ovh = await FetchFromLyricsOvhAsync(coreTitle, artist, ct);
+                if (!string.IsNullOrWhiteSpace(ovh))
+                {
+                    return (new LyricsCandidate
+                    {
+                        Lines = ConvertPlainLyricsToTimed(ovh, durationSec),
+                        Plain = ovh,
+                        Source = "Web"
+                    }, false);
+                }
+            }
+
+            // LRCLIB never answered at all => connectivity problem, not a missing song
+            return (null, stats.LrclibAnswers == 0 && stats.LrclibFailures > 0);
+        }
+
+        private static List<Task<LyricsCandidate?>> StartAll(List<Func<CancellationToken, Task<LyricsCandidate?>>> sources, CancellationToken token)
+        {
+            return sources.Select(s => SafeRun(s, token)).ToList();
+
+            static async Task<LyricsCandidate?> SafeRun(Func<CancellationToken, Task<LyricsCandidate?>> f, CancellationToken token)
+            {
+                try { return await f(token); } catch { return null; }
+            }
+        }
+
+        private static async Task<LyricsCandidate?> FirstSyncedOrBestAsync(List<Task<LyricsCandidate?>> tasks, CancellationToken ct)
+        {
+            var pending = tasks.ToList();
+            LyricsCandidate? fallback = null;
+            while (pending.Count > 0)
+            {
+                var done = await Task.WhenAny(pending);
+                pending.Remove(done);
+                var cand = await done;
+                if (cand == null) continue;
+                if (cand.IsSynced) return cand;
+                fallback ??= cand;
+            }
+            ct.ThrowIfCancellationRequested();
+            return fallback;
+        }
+
+        private async Task<LyricsCandidate?> AppleCandidateAsync(string title, string coreTitle, string artist, CancellationToken ct)
+        {
+            var r = await TryFetchAppleMusicMultiAsync(title, coreTitle, artist, ct);
+            if (r == null || r.Value.lines.Count == 0) return null;
+            return new LyricsCandidate { Lines = r.Value.lines, CacheText = r.Value.lrc, Source = "Apple Music", IsSynced = true };
+        }
+
+        private async Task<LyricsCandidate?> LrclibGetCandidateAsync(string title, string artist, double durationSec, FetchStats stats, CancellationToken ct)
+        {
+            var r = await FetchFromLrclibGetAsync(title, artist, durationSec, stats, ct);
+            if (r == null || !IsPlausibleMatch(r, title, artist, true, durationSec, out _)) return null;
+            return ToCandidate(r, durationSec);
+        }
+
+        private async Task<LyricsCandidate?> LrclibSearchCandidateAsync(string? trackName, string? artistName, string? query,
+            string coreTitle, string artist, bool hasArtist, double durationSec, FetchStats stats, CancellationToken ct)
+        {
+            var items = await FetchFromLrclibSearchAsync(trackName, artistName, query, stats, ct);
+            var r = PickBestLrclibItem(items, coreTitle, artist, hasArtist, durationSec);
+            return r == null ? null : ToCandidate(r, durationSec);
+        }
+
+        private LyricsCandidate? ToCandidate(LrclibResponse r, double durationSec)
+        {
+            string synced = r.SyncedLyrics ?? "";
+            string plain = r.PlainLyrics ?? "";
+
+            if (!string.IsNullOrWhiteSpace(synced))
+            {
+                var parsed = ParseLrcString(synced);
+                if (parsed.Count > 0)
+                    return new LyricsCandidate { Lines = parsed, Plain = plain, CacheText = synced, Source = "LRCLIB", IsSynced = true, IsInstrumental = r.Instrumental };
+            }
+
+            if (!string.IsNullOrWhiteSpace(plain))
+                return new LyricsCandidate { Lines = ConvertPlainLyricsToTimed(plain, durationSec), Plain = plain, Source = "LRCLIB", IsInstrumental = r.Instrumental };
+
+            if (r.Instrumental)
+            {
+                // Instrumental is a definitive answer, treat it like a synced hit
+                return new LyricsCandidate
+                {
+                    Lines = new List<LyricLine> { new() { Timestamp = TimeSpan.Zero, Text = "🎵 Musik Instrumental" } },
+                    Source = "LRCLIB",
+                    IsSynced = true,
+                    IsInstrumental = true
+                };
+            }
+            return null;
         }
 
         private async Task<(List<LyricLine> lines, string lrc)?> TryFetchAppleMusicMultiAsync(string title, string coreTitle, string artist, CancellationToken ct)
@@ -437,13 +550,7 @@ namespace DynamicIsland
                 if (r != null) return r;
             }
 
-            // 4. Try Core Title alone
-            if (!string.IsNullOrWhiteSpace(coreTitle))
-            {
-                var r = await FetchFromAppleMusicAsync(coreTitle, "", ct);
-                if (r != null) return r;
-            }
-
+            // (Title-only lookups were removed: they returned lyrics of unrelated songs with the same name)
             return null;
         }
 
@@ -477,85 +584,151 @@ namespace DynamicIsland
             return lines;
         }
 
-        private async Task<LrclibResponse?> FetchFromLrclibGetAsync(string title, string artist, CancellationToken ct)
+        private static readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+        private async Task<LrclibResponse?> FetchFromLrclibGetAsync(string title, string artist, double durationSec, FetchStats stats, CancellationToken ct)
         {
             try
             {
                 string url = $"https://lrclib.net/api/get?track_name={Uri.EscapeDataString(title)}&artist_name={Uri.EscapeDataString(artist)}";
+                if (durationSec > 20) url += $"&duration={(int)Math.Round(durationSec)}";
+
                 using var response = await _httpClient.GetAsync(url, ct);
+                Interlocked.Increment(ref stats.LrclibAnswers);
                 if (response.IsSuccessStatusCode)
                 {
                     var json = await response.Content.ReadAsStringAsync(ct);
-                    return JsonSerializer.Deserialize<LrclibResponse>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    return JsonSerializer.Deserialize<LrclibResponse>(json, _jsonOptions);
                 }
+            }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                Interlocked.Increment(ref stats.LrclibFailures);
             }
             catch { }
             return null;
         }
 
-        private static LrclibResponse? PickBestLrclibItem(List<LrclibResponse>? items, double durationSec)
+        private async Task<List<LrclibResponse>?> FetchFromLrclibSearchAsync(string? trackName, string? artistName, string? query, FetchStats stats, CancellationToken ct)
         {
-            if (items == null || items.Count == 0) return null;
-            var synced = items.Where(i => !string.IsNullOrWhiteSpace(i.SyncedLyrics)).ToList();
-            if (synced.Count > 0)
+            string url;
+            if (!string.IsNullOrWhiteSpace(query))
             {
-                if (durationSec > 20)
-                {
-                    // Find closest duration if close enough (< 60s)
-                    var bestDuration = synced.OrderBy(i => Math.Abs(i.Duration - durationSec)).First();
-                    if (Math.Abs(bestDuration.Duration - durationSec) < 60) return bestDuration;
-                }
-                // Otherwise return first synced lyric result (common for YouTube with intro/outro skits)
-                return synced[0];
+                url = $"https://lrclib.net/api/search?q={Uri.EscapeDataString(query)}";
             }
-            return items[0];
-        }
-
-        private async Task<LrclibResponse?> FetchFromLrclibSearchStructuredAsync(string title, string artist, double durationSec, CancellationToken ct)
-        {
-            try
+            else if (!string.IsNullOrWhiteSpace(trackName))
             {
-                string url = $"https://lrclib.net/api/search?track_name={Uri.EscapeDataString(title)}";
-                if (!string.IsNullOrWhiteSpace(artist))
-                    url += $"&artist_name={Uri.EscapeDataString(artist)}";
-
-                using var response = await _httpClient.GetAsync(url, ct);
-                if (response.IsSuccessStatusCode)
-                {
-                    var json = await response.Content.ReadAsStringAsync(ct);
-                    var items = JsonSerializer.Deserialize<List<LrclibResponse>>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                    return PickBestLrclibItem(items, durationSec);
-                }
+                url = $"https://lrclib.net/api/search?track_name={Uri.EscapeDataString(trackName)}";
+                if (!string.IsNullOrWhiteSpace(artistName)) url += $"&artist_name={Uri.EscapeDataString(artistName)}";
             }
-            catch { }
-            return null;
-        }
-
-        private async Task<LrclibResponse?> FetchFromLrclibSearchAsync(string query, double durationSec, CancellationToken ct)
-        {
-            if (string.IsNullOrWhiteSpace(query)) return null;
+            else return null;
 
             for (int retry = 0; retry < 2; retry++)
             {
                 try
                 {
-                    string url = $"https://lrclib.net/api/search?q={Uri.EscapeDataString(query)}";
                     using var response = await _httpClient.GetAsync(url, ct);
+                    if ((int)response.StatusCode == 503 || (int)response.StatusCode == 429)
+                    {
+                        await Task.Delay(500, ct);
+                        continue;
+                    }
+                    Interlocked.Increment(ref stats.LrclibAnswers);
                     if (response.IsSuccessStatusCode)
                     {
                         var json = await response.Content.ReadAsStringAsync(ct);
-                        var items = JsonSerializer.Deserialize<List<LrclibResponse>>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                        return PickBestLrclibItem(items, durationSec);
+                        return JsonSerializer.Deserialize<List<LrclibResponse>>(json, _jsonOptions);
                     }
-                    else if ((int)response.StatusCode == 503)
-                    {
-                        await Task.Delay(250, ct);
-                        continue;
-                    }
+                    return null;
                 }
-                catch { }
+                catch (Exception) when (!ct.IsCancellationRequested)
+                {
+                    Interlocked.Increment(ref stats.LrclibFailures);
+                    return null; // A timeout already cost 20s; don't double it
+                }
             }
             return null;
+        }
+
+        private static LrclibResponse? PickBestLrclibItem(List<LrclibResponse>? items, string coreTitle, string artist, bool hasArtist, double durationSec)
+        {
+            if (items == null || items.Count == 0) return null;
+
+            var scored = new List<(LrclibResponse Item, double Score)>();
+            foreach (var item in items)
+            {
+                if (!IsPlausibleMatch(item, coreTitle, artist, hasArtist, durationSec, out bool artistOk)) continue;
+
+                double score = 0;
+                if (!string.IsNullOrWhiteSpace(item.SyncedLyrics)) score += 100;
+                if (artistOk) score += 50;
+                if (NormalizeForMatch(GetCoreTitle(item.TrackName ?? "")) == NormalizeForMatch(coreTitle)) score += 20;
+                if (durationSec > 20 && item.Duration > 0) score -= Math.Min(30, Math.Abs(item.Duration - durationSec));
+                scored.Add((item, score));
+            }
+
+            return scored.Count == 0 ? null : scored.OrderByDescending(s => s.Score).First().Item;
+        }
+
+        /// <summary>
+        /// Rejects search hits that are clearly another song (the old code accepted the first result of any search,
+        /// which is how a TikTok clip ended up with someone else's lyrics).
+        /// </summary>
+        private static bool IsPlausibleMatch(LrclibResponse r, string coreTitle, string artist, bool hasArtist, double durationSec, out bool artistOk)
+        {
+            artistOk = false;
+            string rt = NormalizeForMatch(GetCoreTitle(r.TrackName ?? ""));
+            string t = NormalizeForMatch(coreTitle);
+            if (rt.Length == 0 || t.Length == 0) return false;
+
+            bool titleExact = rt == t;
+            bool titleOk = titleExact
+                           || (t.Length >= 4 && rt.Contains(t))
+                           || (rt.Length >= 4 && t.Contains(rt))
+                           || TokenOverlap(rt, t) >= 0.75;
+            if (!titleOk) return false;
+
+            if (hasArtist)
+            {
+                string ra = NormalizeForMatch(r.ArtistName ?? "");
+                string a = NormalizeForMatch(artist);
+                artistOk = ra.Length > 0 && a.Length > 0 &&
+                           (ra.Contains(a) || a.Contains(ra) || TokenOverlap(ra, a) >= 0.5);
+                if (artistOk) return true;
+            }
+
+            if (durationSec > 20 && r.Duration > 0)
+            {
+                // Music videos often have intros/outros, so allow more slack when the title is an exact match
+                double diff = Math.Abs(r.Duration - durationSec);
+                return titleExact ? diff <= 30 : diff <= 8;
+            }
+
+            return titleExact;
+        }
+
+        private static string NormalizeForMatch(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return "";
+            var sb = new StringBuilder(s.Length);
+            foreach (char ch in s.Normalize(NormalizationForm.FormD))
+            {
+                var cat = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(ch);
+                if (cat == System.Globalization.UnicodeCategory.NonSpacingMark) continue;
+                if (char.IsLetterOrDigit(ch)) sb.Append(char.ToLowerInvariant(ch));
+                else if (ch == '&') sb.Append(" and ");
+                else sb.Append(' ');
+            }
+            return Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
+        }
+
+        private static double TokenOverlap(string a, string b)
+        {
+            var ta = a.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
+            var tb = b.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
+            if (ta.Count == 0 || tb.Count == 0) return 0;
+            int common = ta.Count(x => tb.Contains(x));
+            return (double)common / Math.Min(ta.Count, tb.Count);
         }
 
         private async Task<string?> FetchFromLyricsOvhAsync(string title, string artist, CancellationToken ct)
@@ -702,17 +875,245 @@ namespace DynamicIsland
             return list.OrderBy(x => x.Timestamp).ToList();
         }
 
-        private void ApplyLyricsResult(bool hasLyrics, List<LyricLine> lines, string plain, bool instrumental = false)
+        private void ApplyLyricsResult(string trackKey, bool hasLyrics, List<LyricLine> lines, string plain, bool instrumental = false, string? status = null)
         {
             _dispatcher.Invoke(() =>
             {
+                // A slower lookup for a previous song must not overwrite the current one
+                if (trackKey != _currentTrackKey) return;
+
                 Lines = new ObservableCollection<LyricLine>(lines);
                 HasLyrics = hasLyrics && lines.Count > 0;
                 IsInstrumental = instrumental;
                 _activeIndex = -1;
-                CurrentLyricText = HasLyrics ? Lines[0].Text : "";
-                NextLyricText = (HasLyrics && Lines.Count > 1) ? Lines[1].Text : "";
-                StatusMessage = HasLyrics ? "" : "Lirik belum tersedia untuk lagu ini";
+                CurrentLyricText = "";
+                NextLyricText = HasLyrics ? Lines[0].Text : "";
+                CurrentTranslation = "";
+                StatusMessage = status ?? (HasLyrics ? "" : "Lirik tidak ditemukan untuk lagu ini");
+                IsLoading = false;
+                foreach (var l in Lines) l.Translation = _showTranslation ? l.TranslatedText : "";
+            });
+
+            if (hasLyrics && !instrumental && lines.Count > 0)
+                _ = TranslateLinesAsync(trackKey, lines);
+        }
+
+        // ───────────────────────── Lyric translation ─────────────────────────
+
+        private bool _showTranslation = SettingsManager.Instance.LyricsTranslate;
+        /// <summary>Show a translated line under every lyric line (persisted in the settings).</summary>
+        public bool ShowTranslation
+        {
+            get => _showTranslation;
+            set
+            {
+                if (_showTranslation == value) return;
+                _showTranslation = value;
+                SettingsManager.Instance.LyricsTranslate = value;
+                OnPropertyChanged();
+                foreach (var l in Lines) l.Translation = value ? l.TranslatedText : "";
+                UpdateCurrentTranslation();
+                if (value && HasLyrics && !IsInstrumental && !Lines.Any(l => l.TranslatedText.Length > 0))
+                    _ = TranslateLinesAsync(_currentTrackKey, Lines.ToList());
+            }
+        }
+
+        private bool _isTranslating;
+        public bool IsTranslating
+        {
+            get => _isTranslating;
+            private set { if (_isTranslating != value) { _isTranslating = value; OnPropertyChanged(); } }
+        }
+
+        private string _currentTranslation = "";
+        /// <summary>Translation of the line being sung (for the compact views).</summary>
+        public string CurrentTranslation
+        {
+            get => _currentTranslation;
+            private set { if (_currentTranslation != value) { _currentTranslation = value; OnPropertyChanged(); } }
+        }
+
+        private void UpdateCurrentTranslation()
+        {
+            CurrentTranslation = _showTranslation && _activeIndex >= 0 && _activeIndex < Lines.Count ? Lines[_activeIndex].TranslatedText : "";
+        }
+
+        /// <summary>Language the lyrics are translated into: the app language (Indonesian by default).</summary>
+        private static string TranslationTarget
+        {
+            get
+            {
+                string lang = LocalizationManager.Instance.CurrentLanguage;
+                return string.IsNullOrWhiteSpace(lang) ? "id" : lang.ToLowerInvariant();
+            }
+        }
+
+        private readonly Dictionary<string, Dictionary<string, string>> _translationCache = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _translationsRunning = new(StringComparer.OrdinalIgnoreCase);
+
+        private async Task TranslateLinesAsync(string trackKey, List<LyricLine> lines)
+        {
+            if (!_showTranslation || string.IsNullOrEmpty(trackKey)) return;
+            string target = TranslationTarget;
+            string key = trackKey + "||" + target;
+            if (!_translationsRunning.Add(key)) return;
+
+            try
+            {
+                var texts = lines.Select(l => l.Text.Trim())
+                                 .Where(t => t.Length > 1 && t.Any(char.IsLetter))
+                                 .Distinct(StringComparer.Ordinal)
+                                 .ToList();
+                if (texts.Count == 0) return;
+
+                if (!_translationCache.TryGetValue(key, out var map))
+                {
+                    string file = GetTranslationCacheFilePath(trackKey, target);
+                    map = await Task.Run(() => LoadTranslationFile(file));
+                    if (map == null)
+                    {
+                        _dispatcher.Invoke(() => { if (trackKey == _currentTrackKey) IsTranslating = true; });
+                        map = await FetchTranslationsAsync(texts, target);
+                        if (map == null) return; // offline: try again next time this song is loaded
+                        SaveTranslationFile(file, map);
+                    }
+                    _translationCache[key] = map;
+                }
+
+                _dispatcher.Invoke(() =>
+                {
+                    if (trackKey != _currentTrackKey) return;
+                    foreach (var l in lines)
+                    {
+                        l.TranslatedText = map.TryGetValue(l.Text.Trim(), out var tr) ? tr : "";
+                        l.Translation = _showTranslation ? l.TranslatedText : "";
+                    }
+                    UpdateCurrentTranslation();
+                });
+            }
+            catch { }
+            finally
+            {
+                _translationsRunning.Remove(key);
+                _dispatcher.Invoke(() => { if (trackKey == _currentTrackKey) IsTranslating = false; });
+            }
+        }
+
+        /// <summary>
+        /// Translates the lines in a few batched requests (one line per row). Returns text→translation,
+        /// leaving out lines that are already in the target language. Null when the service can't be reached.
+        /// </summary>
+        private static async Task<Dictionary<string, string>?> FetchTranslationsAsync(List<string> texts, string target)
+        {
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            bool anyAnswer = false;
+
+            // Batches of ~1500 characters keep the request small and the line split reliable
+            var batches = new List<List<string>>();
+            var cur = new List<string>(); int len = 0;
+            foreach (var t in texts)
+            {
+                if (cur.Count > 0 && len + t.Length > 1500) { batches.Add(cur); cur = new List<string>(); len = 0; }
+                cur.Add(t); len += t.Length + 1;
+            }
+            if (cur.Count > 0) batches.Add(cur);
+
+            foreach (var batch in batches)
+            {
+                var (rows, srcLang) = await GoogleTranslateAsync(string.Join("\n", batch), target);
+                if (rows == null) continue;
+                anyAnswer = true;
+                if (string.Equals(srcLang, target, StringComparison.OrdinalIgnoreCase)) continue; // already in the app language
+
+                if (rows.Count == batch.Count)
+                {
+                    for (int i = 0; i < batch.Count; i++) AddTranslation(result, batch[i], rows[i]);
+                }
+                else
+                {
+                    // The service merged or split rows: translate this batch line by line instead
+                    using var gate = new SemaphoreSlim(4);
+                    var tasks = batch.Select(async line =>
+                    {
+                        await gate.WaitAsync();
+                        try
+                        {
+                            var (r, _) = await GoogleTranslateAsync(line, target);
+                            return (line, tr: r == null ? "" : string.Join(" ", r));
+                        }
+                        finally { gate.Release(); }
+                    }).ToList();
+                    foreach (var (line, tr) in await Task.WhenAll(tasks))
+                        lock (result) AddTranslation(result, line, tr);
+                }
+            }
+            return anyAnswer ? result : null;
+
+            static void AddTranslation(Dictionary<string, string> map, string original, string translated)
+            {
+                translated = (translated ?? "").Trim();
+                if (translated.Length == 0) return;
+                if (NormalizeForMatch(translated) == NormalizeForMatch(original)) return; // same line (name, "oh oh", already translated)
+                map[original] = translated;
+            }
+        }
+
+        private static async Task<(List<string>? Rows, string SourceLang)> GoogleTranslateAsync(string text, string target)
+        {
+            try
+            {
+                string url = $"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={Uri.EscapeDataString(target)}&dt=t";
+                using var content = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("q", text) });
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+                using var res = await _httpClient.PostAsync(url, content, cts.Token);
+                if (!res.IsSuccessStatusCode) return (null, "");
+
+                using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync(cts.Token));
+                var root = doc.RootElement;
+                var sb = new StringBuilder();
+                if (root.ValueKind == JsonValueKind.Array && root.GetArrayLength() > 0 && root[0].ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var seg in root[0].EnumerateArray())
+                    {
+                        if (seg.ValueKind == JsonValueKind.Array && seg.GetArrayLength() > 0 && seg[0].ValueKind == JsonValueKind.String)
+                            sb.Append(seg[0].GetString());
+                    }
+                }
+                string src = root.ValueKind == JsonValueKind.Array && root.GetArrayLength() > 2 && root[2].ValueKind == JsonValueKind.String
+                    ? root[2].GetString() ?? "" : "";
+                var rows = sb.ToString().Replace("\r", "").Split('\n').Select(r => r.Trim()).ToList();
+                while (rows.Count > 0 && rows[^1].Length == 0) rows.RemoveAt(rows.Count - 1);
+                return (rows, src);
+            }
+            catch
+            {
+                return (null, "");
+            }
+        }
+
+        private string GetTranslationCacheFilePath(string trackKey, string target)
+        {
+            string safeName = trackKey.Replace("||", "_");
+            foreach (char c in Path.GetInvalidFileNameChars()) safeName = safeName.Replace(c, '_');
+            if (safeName.Length > 80) safeName = safeName.Substring(0, 80);
+            return Path.Combine(_cacheDirectory, $"{safeName}.{target}.tr.json");
+        }
+
+        private static Dictionary<string, string>? LoadTranslationFile(string path)
+        {
+            try
+            {
+                if (!File.Exists(path)) return null;
+                return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path, Encoding.UTF8));
+            }
+            catch { return null; }
+        }
+
+        private static void SaveTranslationFile(string path, Dictionary<string, string> map)
+        {
+            _ = Task.Run(() =>
+            {
+                try { File.WriteAllText(path, JsonSerializer.Serialize(map), Encoding.UTF8); } catch { }
             });
         }
 
@@ -727,6 +1128,7 @@ namespace DynamicIsland
                 IsLoading = false;
                 CurrentLyricText = "";
                 NextLyricText = "";
+                CurrentTranslation = "";
                 StatusMessage = status;
                 _currentTrackKey = "";
                 _activeIndex = -1;
@@ -750,7 +1152,21 @@ namespace DynamicIsland
                 }
             }
 
-            if (newIndex == -1) newIndex = 0;
+            if (newIndex == -1)
+            {
+                // Intro before the first lyric line: show a music note instead of highlighting line 1 early
+                if (_activeIndex != -1 || CurrentLyricText != "♪")
+                {
+                    _activeIndex = -1;
+                    foreach (var l in Lines) { l.IsActive = false; l.IsPast = false; l.Progress = 0.0; }
+                    CurrentLyricText = "♪";
+                    NextLyricText = Lines[0].Text;
+                    CurrentTranslation = "";
+                    CurrentLineProgress = 0.0;
+                    ActiveLineChanged?.Invoke(-1);
+                }
+                return;
+            }
 
             if (newIndex != _activeIndex)
             {
@@ -768,6 +1184,7 @@ namespace DynamicIsland
 
                 CurrentLyricText = Lines[_activeIndex].Text;
                 NextLyricText = (_activeIndex + 1 < Lines.Count) ? Lines[_activeIndex + 1].Text : "";
+                UpdateCurrentTranslation();
                 ActiveLineChanged?.Invoke(_activeIndex);
             }
 
@@ -803,6 +1220,23 @@ namespace DynamicIsland
         }
 
         public static (string Title, string Artist) CleanTrackMetadata(string rawTitle, string rawArtist)
+            => CleanTrackMetadata(rawTitle, rawArtist, structuredSource: false);
+
+        // Bracket groups like "(Official HD Video)", "(Explicit Video)", "[4K Upgrade]" that are never part of the song name
+        private static readonly Regex _noiseBracketContent = new(
+            @"\b(?:official|video|audio|lyrics?|lirik|mv|m/v|visuali[sz]er|explicit|clean|hd|hq|4k|8k|1080p|720p|remaster(?:ed)?|upgrade|subs?|subtitle|terjemahan|karaoke|teaser|trailer|performance|clip|klip)\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        // "Song - Remix" style suffixes: the part after the dash is a version, not an artist/title split
+        private static readonly Regex _versionSuffix = new(
+            @"\b(?:remix|mix|edit|version|versi|live|acoustic|akustik|remaster(?:ed)?|instrumental|cover|karaoke|slowed|sped\s*up|reverb|from)\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        /// <param name="structuredSource">
+        /// True for Apple Music / Spotify (and for already-cleaned values): the title is the song name,
+        /// so it is never split on " - " (which used to turn "Song - Live" into title "Live", artist "Song").
+        /// </param>
+        public static (string Title, string Artist) CleanTrackMetadata(string rawTitle, string rawArtist, bool structuredSource)
         {
             if (string.IsNullOrWhiteSpace(rawTitle)) return ("", "");
 
@@ -874,6 +1308,17 @@ namespace DynamicIsland
             {
                 title = Regex.Replace(title, pattern, "", RegexOptions.IgnoreCase).Trim();
             }
+            title = Regex.Replace(title, @"\s*[\(\[【]([^\)\]】]*)[\)\]】]",
+                m => _noiseBracketContent.IsMatch(m.Groups[1].Value) ? "" : m.Value).Trim();
+            // Unbracketed trailing tags: "Song. Official Video", "Song | Official Music Video", "Song - Video Klip Resmi"
+            title = Regex.Replace(title,
+                @"[\s\.\-|,:]+(?:Official\s+(?:Music\s+|Lyrics?\s+|HD\s+|4K\s+)?(?:Video|Audio|MV|Visuali[sz]er)|Lyrics?\s+Video|Music\s+Video|Video\s+(?:Klip|Lirik)(?:\s+Resmi)?)\b.*$",
+                "", RegexOptions.IgnoreCase).Trim();
+
+            if (structuredSource)
+            {
+                return (CleanSingleString(title), CleanArtistName(artist));
+            }
 
             // 3. Handle Unicode / Asian quotation brackets: 「Title」, 『Title』, 【Title】
             var cjkMatch = Regex.Match(title, @"^(.+?)[\u300C\u300E\u3010](.+?)[\u300D\u300F\u3011]");
@@ -891,7 +1336,7 @@ namespace DynamicIsland
             string cleanA = CleanArtistName(artist);
 
             // 5. Look for Artist - Title separators in title
-            string[] separators = new[] { " - ", " – ", " — ", " : ", " | ", " ~ ", " // ", " / ", " by " };
+            string[] separators = new[] { " - ", " – ", " — ", " ♦ ", " • ", " ・ ", " ｜ ", " : ", " | ", " ~ ", " // ", " / ", " by " };
             string matchedSep = "";
             foreach (var sep in separators)
             {
@@ -910,23 +1355,43 @@ namespace DynamicIsland
                     string part0 = CleanSingleString(parts[0]);
                     string part1 = CleanSingleString(parts[1]);
 
-                    bool artistIsChannelOrGeneric = IsChannelOrGenericArtist(cleanA);
-
-                    if (artistIsChannelOrGeneric)
+                    if (IsChannelOrGenericArtist(cleanA))
                     {
                         // On YouTube, "Artist - Title" is the standard format
                         return (part1, part0);
                     }
-                    else
+
+                    string nA = NormalizeForMatch(cleanA);
+                    string n0 = NormalizeForMatch(part0);
+                    string n1 = NormalizeForMatch(part1);
+
+                    // "TULUS - Hati-Hati di Jalan" uploaded by channel "Tulus"
+                    if (n0.Length > 0 && (n0.Contains(nA) || nA.Contains(n0)))
                     {
-                        // If part1 equals the artist, then part0 is the title
-                        if (part1.Equals(cleanA, StringComparison.OrdinalIgnoreCase))
-                        {
-                            return (part0, cleanA);
-                        }
-                        // Default YouTube format: part0 is Artist, part1 is Title
                         return (part1, part0);
                     }
+                    // "Hati-Hati di Jalan - Tulus"
+                    if (n1.Length > 0 && (n1.Contains(nA) || nA.Contains(n1)))
+                    {
+                        return (part0, cleanA);
+                    }
+                    // Real artist + "Song - Remix" (YouTube Music): keep the whole title
+                    if (_versionSuffix.IsMatch(part1))
+                    {
+                        return (CleanSingleString(title), cleanA);
+                    }
+                    // Default YouTube format: part0 is Artist, part1 is Title
+                    return (part1, part0);
+                }
+            }
+
+            // "Artist Title" without a separator, e.g. "Morfem (Indonesia) Rayakan Pemenang" on channel "MORFEMoriginal"
+            if (!IsChannelOrGenericArtist(cleanA) && cleanA.Length >= 2)
+            {
+                var m = Regex.Match(title, "^" + Regex.Escape(cleanA) + @"\b\s*(?:\([^)]*\)|\[[^\]]*\])?\s*[:\-–—]?\s*(.+)$", RegexOptions.IgnoreCase);
+                if (m.Success && m.Groups[1].Value.Trim().Length >= 2)
+                {
+                    return (CleanSingleString(m.Groups[1].Value), cleanA);
                 }
             }
 
@@ -940,6 +1405,9 @@ namespace DynamicIsland
             // Strip feat / ft additions e.g. (feat. Artist) or ft. Artist
             core = Regex.Replace(core, @"\s*[\(\[]\s*(?:feat\.?|ft\.?|featuring)\s+[^)\]]+[\)\]]", "", RegexOptions.IgnoreCase);
             core = Regex.Replace(core, @"\s+(?:feat\.?|ft\.?|featuring)\s+.+$", "", RegexOptions.IgnoreCase);
+            // Soundtrack / remaster suffixes: "Song - From \"Movie\"", "Song (From Movie)", "Song - 2011 Remaster"
+            core = Regex.Replace(core, @"\s*[\(\[]\s*From\s+[^)\]]+[\)\]]", "", RegexOptions.IgnoreCase);
+            core = Regex.Replace(core, @"\s+[-–—]\s+(?:From\s+.+|(?:\d{4}\s+)?Remaster(?:ed)?(?:\s+\d{4})?(?:\s+Version)?)$", "", RegexOptions.IgnoreCase);
             return CleanSingleString(core);
         }
 
@@ -959,9 +1427,10 @@ namespace DynamicIsland
 
             foreach (var token in genericTokens)
             {
-                if (a.Contains(token)) return true;
+                // Whole words only, so real artists like "The Edge" or "Hedgehog" aren't treated as channels
+                if (Regex.IsMatch(a, $@"(?:^|\W){Regex.Escape(token)}(?:$|\W)")) return true;
             }
-            return false;
+            return a.EndsWith("vevo");
         }
 
         private static string CleanArtistName(string artist)
@@ -969,22 +1438,24 @@ namespace DynamicIsland
             if (string.IsNullOrWhiteSpace(artist)) return "";
             string a = artist.Trim();
 
-            // Apple Music Windows appends " - {Album}"
-            if (a.Contains(" - "))
+            // Apple Music for Windows reports "Artist — Album" (em dash); YouTube channels use "Artist - Topic"
+            foreach (var sep in new[] { " — ", " – ", " - " })
             {
-                var parts = a.Split(new[] { " - " }, 2, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length > 0 && !string.IsNullOrWhiteSpace(parts[0])) a = parts[0].Trim();
-            }
-            else if (a.Contains(" – "))
-            {
-                var parts = a.Split(new[] { " – " }, 2, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length > 0 && !string.IsNullOrWhiteSpace(parts[0])) a = parts[0].Trim();
+                int idx = a.IndexOf(sep, StringComparison.Ordinal);
+                if (idx > 0)
+                {
+                    a = a.Substring(0, idx).Trim();
+                    break;
+                }
             }
 
             a = Regex.Replace(a, @"VEVO$", "", RegexOptions.IgnoreCase).Trim();
             a = Regex.Replace(a, @"\s*-\s*Topic$", "", RegexOptions.IgnoreCase).Trim();
             a = Regex.Replace(a, @"\s+Official(?:\s+Channel)?$", "", RegexOptions.IgnoreCase).Trim();
-            a = Regex.Replace(a, @"\s+(?:Records|Music|Entertainment|Channel)$", "", RegexOptions.IgnoreCase).Trim();
+            a = Regex.Replace(a, @"\s+(?:Records|Music|Entertainment|Channel|Original|TV)$", "", RegexOptions.IgnoreCase).Trim();
+            // Glued channel suffixes: "MORFEMoriginal", "TulusOfficial", "NoahMusic"
+            a = Regex.Replace(a, @"(?<=[A-Z0-9])(?:official|original|music|tv)$", "").Trim();
+            a = Regex.Replace(a, @"(?<=[a-z0-9])(?:Official|Original|Music|TV)$", "").Trim();
             return CleanSingleString(a);
         }
 
@@ -992,7 +1463,12 @@ namespace DynamicIsland
         {
             if (string.IsNullOrWhiteSpace(s)) return "";
             string res = s.Trim();
-            res = res.Trim('"', '\'', '`', '“', '”', '‘', '’');
+            res = res.Trim(' ', '♦', '•', '・', '|', '｜', '~', '-', '–', '—');
+            // Only unwrap quotes that enclose the whole string ('"Song"'), never strip a lone closing quote
+            if (res.Length > 1 && "\"'`“‘".Contains(res[0]) && "\"'`”’".Contains(res[^1]))
+            {
+                res = res.Substring(1, res.Length - 2);
+            }
             res = Regex.Replace(res, @"\s+", " ").Trim();
             return res;
         }

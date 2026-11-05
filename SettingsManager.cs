@@ -52,6 +52,7 @@ namespace DynamicIsland
         // 5. NOTIFICATIONS (DISCORD, STEAM, SYSTEM)
         private bool _enableNotifications = true;
         private bool _enableDiscordNotif = true;
+        private bool _enableWhatsAppNotif = true;
         private bool _enableSteamNotif = true;
 
         // 6. SYSTEM & PONI GENERAL SETTINGS
@@ -93,6 +94,55 @@ namespace DynamicIsland
         private bool _showPomodoroWidget = true;
         private bool _enableDynamicIsland = true;
         private bool _enableFloatingDock = true;
+        private bool _showToolsTab = true;
+        private bool _showTaskbarTab = true;
+        private bool _calendarWeekStartsMonday = true;
+        private bool _calendarMarkToday = true;
+        private bool _showAccessoryBattery = true;
+        private bool _showWifiSsid = true;
+
+        public bool ShowToolsTab
+        {
+            get => _showToolsTab;
+            set { _showToolsTab = value; OnPropertyChanged(); Save(); }
+        }
+
+        public bool ShowTaskbarTab
+        {
+            get => _showTaskbarTab;
+            set { _showTaskbarTab = value; OnPropertyChanged(); Save(); }
+        }
+
+        public bool CalendarWeekStartsMonday
+        {
+            get => _calendarWeekStartsMonday;
+            set { _calendarWeekStartsMonday = value; OnPropertyChanged(); Save(); }
+        }
+
+        public bool CalendarMarkToday
+        {
+            get => _calendarMarkToday;
+            set { _calendarMarkToday = value; OnPropertyChanged(); Save(); }
+        }
+
+        public bool ShowAccessoryBattery
+        {
+            get => _showAccessoryBattery;
+            set { _showAccessoryBattery = value; OnPropertyChanged(); Save(); }
+        }
+
+        public bool ShowWifiSsid
+        {
+            get => _showWifiSsid;
+            set { _showWifiSsid = value; OnPropertyChanged(); Save(); }
+        }
+
+        private bool _lyricsTranslate = true;
+        public bool LyricsTranslate
+        {
+            get => _lyricsTranslate;
+            set { _lyricsTranslate = value; OnPropertyChanged(); Save(); }
+        }
 
         public bool EnableDynamicIsland
         {
@@ -264,6 +314,12 @@ namespace DynamicIsland
         {
             get => _enableDiscordNotif;
             set { _enableDiscordNotif = value; OnPropertyChanged(); Save(); }
+        }
+
+        public bool EnableWhatsAppNotif
+        {
+            get => _enableWhatsAppNotif;
+            set { _enableWhatsAppNotif = value; OnPropertyChanged(); Save(); }
         }
 
         public bool EnableSteamNotif
@@ -595,6 +651,7 @@ namespace DynamicIsland
                         _manualGameMode = data.ManualGameMode;
                         _enableNotifications = data.EnableNotifications;
                         _enableDiscordNotif = data.EnableDiscordNotif;
+                        _enableWhatsAppNotif = data.EnableWhatsAppNotif;
                         _enableSteamNotif = data.EnableSteamNotif;
                         _enableSoundEffects = data.EnableSoundEffects;
                         _enableClipboardManager = data.EnableClipboardManager;
@@ -633,6 +690,13 @@ namespace DynamicIsland
                         _showBatteryHUD = data.ShowBatteryHUD;
                         _showBluetoothHUD = data.ShowBluetoothHUD;
                         _showVolumeHUD = data.ShowVolumeHUD;
+                        _showToolsTab = data.ShowToolsTab;
+                        _showTaskbarTab = data.ShowTaskbarTab;
+                        _calendarWeekStartsMonday = data.CalendarWeekStartsMonday;
+                        _calendarMarkToday = data.CalendarMarkToday;
+                        _showAccessoryBattery = data.ShowAccessoryBattery;
+                        _showWifiSsid = data.ShowWifiSsid;
+                        _lyricsTranslate = data.LyricsTranslate;
                     }
                 }
             }
@@ -662,6 +726,7 @@ namespace DynamicIsland
             public bool ManualGameMode { get; set; } = false;
             public bool EnableNotifications { get; set; } = true;
             public bool EnableDiscordNotif { get; set; } = true;
+            public bool EnableWhatsAppNotif { get; set; } = true;
             public bool EnableSteamNotif { get; set; } = true;
             public bool EnableSoundEffects { get; set; } = true;
             public bool EnableClipboardManager { get; set; } = true;
@@ -696,6 +761,13 @@ namespace DynamicIsland
             public bool ShowBatteryHUD { get; set; } = true;
             public bool ShowBluetoothHUD { get; set; } = true;
             public bool ShowVolumeHUD { get; set; } = true;
+            public bool ShowToolsTab { get; set; } = true;
+            public bool ShowTaskbarTab { get; set; } = true;
+            public bool CalendarWeekStartsMonday { get; set; } = true;
+            public bool CalendarMarkToday { get; set; } = true;
+            public bool ShowAccessoryBattery { get; set; } = true;
+            public bool ShowWifiSsid { get; set; } = true;
+            public bool LyricsTranslate { get; set; } = true;
         }
     }
 }
