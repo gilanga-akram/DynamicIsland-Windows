@@ -2,7 +2,7 @@
 ; Multi-PC / Laptop Universal Installer (Self-Contained .NET 9)
 
 #define MyAppName "Dynamic Island Pro"
-#define MyAppVersion "1.4.1"
+#define MyAppVersion "1.4.2"
 #define MyAppPublisher "Dynamic Island Project"
 #define MyAppExeName "DynamicIsland.exe"
 
@@ -15,7 +15,7 @@ DefaultDirName={autopf}\Dynamic Island Pro
 DefaultGroupName=Dynamic Island Pro
 AllowNoIcons=yes
 OutputDir=E:\Installer
-OutputBaseFilename=DynamicIsland-Setup-v1.4.1-Win64
+OutputBaseFilename=DynamicIsland-Setup-v1.4.2-Win64
 SetupIconFile=Assets\app.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
